@@ -1,87 +1,89 @@
-# Product Video Pipeline - Progress Overview
+# Product Video Pipeline - 项目进度总览
 
-## Pipeline Flow
+## 流水线流程 / Pipeline Flow
 
 ```
-INPUT: Product Selling Points (Text)
+输入: 产品卖点文案 (文本)
          │
          ▼
 ┌─────────────────────────┐
-│ Step 2: Skill 1         │
-│ Sellpoint → Storyboard  │──── Rules: storyboard_rules.md
-│ (15 shots, 4-5 groups)  │     Output: JSON with prompts + motion_hint
+│ 步骤2: 技能1             │
+│ 卖点 → 分镜脚本          │──── 规则: storyboard_rules.md
+│ (15个镜头, 4-5组场景)    │     输出: JSON (提示词 + 运动提示)
 └────────────┬────────────┘
              │
              ▼
 ┌─────────────────────────┐
-│ Step 4: Skill 2         │
-│ Storyboard → Frame      │──── Gemini Image Gen (dual channel)
-│ (prompt → AI image)     │     Three-layer control: hard/soft/free
+│ 步骤4: 技能2             │
+│ 分镜 → 画面帧            │──── Gemini 图像生成 (双通道)
+│ (提示词 → AI生图)        │     三层控制: 硬约束/软引导/自由发挥
+└────────────┬────────────┘
+             │
+             ▼
+┌───────────���─────────────┐
+│ 步骤3: 技能3             │
+│ 合规性检查               │──── Gemini Vision 多模态比对
+│ (产品还原度校验)          │     输出: PASS / WARN / FAIL
+└────────────┬────────────┘     FAIL → 重新生成画面帧
+             │
+             ▼
+┌─────────────────────────┐
+│ 步骤5: 技能4             │
+│ 画面帧 → 视频片段         │──── Kling AI 图生视频
+│ (图片 + 运动 → 视频)     │     运动规划器: 镜头类型 → 运动参数
 └────────────┬────────────┘
              │
              ▼
 ┌─────────────────────────┐
-│ Step 3: Skill 3         │
-│ Compliance Check        │──── Gemini Vision multimodal compare
-│ (product fidelity)      │     Output: PASS / WARN / FAIL
-└────────────┬────────────┘     FAIL → re-generate frame
-             │
+│ 步骤7: 技能5             │
+│ 自动剪辑                 │──── VideoDB: 视频 → ���本描述
+│ (分析 + 剪辑 + EDL)      │     LLM: 剪辑决策
+└────────────┬────────────┘     ffmpeg: 拼接 .mp4 片段
+             │                  输出: 成片 + EDL 时间线
              ▼
-┌─────────────────────────┐
-│ Step 5: Skill 4         │
-│ Frame → Video           │──── Kling AI image2video
-│ (image + motion → clip) │     motion_planner maps shot_type → motion
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│ Step 7: Skill 5         │
-│ Auto Editor             │──── VideoDB: video → text description
-│ (analyze + edit + EDL)  │     LLM: editing decisions
-└────────────┬────────────┘     ffmpeg: assemble .mp4 clips
-             │                  Output: final video + EDL
-             ▼
-OUTPUT: Final Video (.mp4) + EDL Timeline
+输出: 最终视频 (.mp4) + EDL 时间线
 ```
 
-## Step-by-Step Progress
+## 各步骤进度 / Step-by-Step Progress
 
-| Step | Name | Status | Description |
-|------|------|--------|-------------|
-| 1 | Project Skeleton | DONE | Directory structure, config, models, utils, pipeline orchestrator |
-| 2 | Skill 1: Sellpoint → Storyboard | TODO | Migrate + optimize converter, split rules, add motion_hint |
-| 3 | Skill 3: Compliance Checker | TODO | Gemini Vision multimodal comparison, PASS/WARN/FAIL |
-| 4 | Skill 2: Storyboard → Frame | TODO | Image generation + three-layer prompt control |
-| 5 | Skill 4: Frame → Video | TODO | Kling AI integration + motion planner |
-| 6 | Pipeline Orchestrator | TODO | Wire up all skills, semi-auto mode, state management |
-| 7 | Skill 5: Auto Editor | TODO | VideoDB analysis, LLM editing, ffmpeg assembly, EDL export |
-| 8 | E2E Testing & Optimization | TODO | Full pipeline test, error handling, UX polish |
+| 步骤 | 名称 | 状态 | 说明 |
+|------|------|------|------|
+| 1 | 项目骨架搭建 | ✅ 完成 | 目录结构、配置、数据模型、工具函数、流水线编排器 |
+| 2 | 技能1: 卖点→分镜 | ✅ 完成 | 迁移优化转换器、拆分规则、添加运动提示、验证器、Type A/B 测试通过 |
+| 3 | 技能3: 合规性检查 | ⬚ 待开发 | Gemini Vision 多模态比对，PASS/WARN/FAIL 判定 |
+| 4 | 技能2: 分镜→画面帧 | ⬚ 待开发 | AI 图像生成 + 三层提示词控制 |
+| 5 | 技能4: 画面帧→视频 | ⬚ 待开发 | Kling AI 集成 + 运动规划器 |
+| 6 | 流水线编排器 | ⬚ 待开发 | 串联所有技能、半自动模式、状态管理 |
+| 7 | 技能5: 自动剪辑 | ⬚ 待开发 | VideoDB 分析、LLM 剪辑决策、ffmpeg 拼接、EDL 导出 |
+| 8 | 端到端测试与优化 | ⬚ 待开发 | 全流水线测试、错误处理、用户体验打磨 |
 
-## Architecture
+## 架构 / Architecture
 
 ```
 main.py
-  └── pipeline/orchestrator.py (Mode B: semi-auto, step-by-step with user confirm)
-        ├── skills/sellpoint_to_storyboard/  (Skill 1)
-        ├── skills/storyboard_to_frame/      (Skill 2)
-        ├── skills/compliance_checker/       (Skill 3)
-        ├── skills/frame_to_video/           (Skill 4)
-        └── skills/auto_editor/              (Skill 5)
+  └── pipeline/orchestrator.py (Mode B: 半自动模式, 逐步确认)
+        ├── skills/sellpoint_to_storyboard/  (技能1: 卖点→分镜)
+        ├── skills/storyboard_to_frame/      (技能2: 分镜→画面帧)
+        ├── skills/compliance_checker/       (技能3: 合规性检查)
+        ├── skills/frame_to_video/           (技能4: 画面帧→视频)
+        └── skills/auto_editor/              (技能5: 自动剪辑)
 
-Shared:
-  ├── models/          (Pydantic data models)
-  ├── utils/           (LLM client, ffmpeg wrapper, JSON repair)
-  └── config/          (Environment variables)
+共享模块:
+  ├── models/          (Pydantic 数据模型)
+  ├── utils/           (LLM 客户端, ffmpeg 封装, JSON 修复)
+  └── config/          (环境变量配置)
 ```
 
-## Key Technical Decisions
+## 关键技术选型 / Key Technical Decisions
 
-- **LLM**: Gemini (primary, dual-auth) + DeepSeek (fallback)
-- **Image Gen**: Gemini Image Gen (dual channel)
-- **Video Gen**: Kling AI (image2video)
-- **Video Analysis**: VideoDB (video → text descriptions for LLM)
-- **Video Processing**: ffmpeg (assembly, transitions, BGM mixing)
-- **EDL Format**: CMX 3600
-- **Data Validation**: Pydantic v2
-- **Mode**: Semi-auto (Mode B) first, full-auto (Mode A) later
-- **Kling Output**: Consistent parameters, no preprocessing needed
+| 类别 | 选型 | 备注 |
+|------|------|------|
+| LLM | Gemini (主力, 双认证) + DeepSeek (备选) | |
+| 图像生成 | Gemini Image Gen | 双通道 |
+| 视频生成 | Kling AI | 图生视频 |
+| 视频分析 | VideoDB | 视频→文本描述供 LLM 分析 |
+| 视频处理 | ffmpeg | 拼接、转场、BGM 混音 |
+| EDL 格式 | CMX 3600 | |
+| 数据校验 | Pydantic v2 | |
+| 运行模式 | 先做半自动 (Mode B)，再做全自动 (Mode A) | |
+| Kling 输出 | 统一参数，无需预处理 | |
