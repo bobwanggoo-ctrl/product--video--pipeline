@@ -10,7 +10,6 @@ class Shot(BaseModel):
     purpose: str
     prompt_cn: str
     motion_hint: str = ""  # e.g. "缓慢推进，从左至右平移"
-    duration_suggest: float = 3.0  # seconds
 
 
 class SceneGroup(BaseModel):

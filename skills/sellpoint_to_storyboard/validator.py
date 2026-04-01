@@ -6,14 +6,6 @@ from typing import Any
 # Valid shot types
 VALID_SHOT_TYPES = {"Wide", "Medium", "Close", "Macro"}
 
-# Duration ranges per shot type (A8)
-DURATION_RANGES: dict[str, tuple[float, float]] = {
-    "Wide": (3.0, 4.0),
-    "Medium": (2.0, 3.0),
-    "Close": (2.0, 3.0),
-    "Macro": (1.5, 2.0),
-}
-
 
 def validate_storyboard(data: dict[str, Any]) -> tuple[bool, list[str]]:
     """Validate storyboard dict against hard constraints A1-A8.
@@ -115,25 +107,6 @@ def validate_storyboard(data: dict[str, Any]) -> tuple[bool, list[str]]:
         hint = s.get("motion_hint", "")
         if not hint or not hint.strip():
             errors.append(f"[FAIL] A7: shot {sid} missing motion_hint")
-
-    # --- A8: duration_suggest ---
-    for s in all_shots:
-        sid = s.get("shot_id", "?")
-        shot_type = s.get("type", "")
-        dur = s.get("duration_suggest")
-
-        if dur is None:
-            errors.append(f"[FAIL] A8: shot {sid} missing duration_suggest")
-            continue
-
-        expected = DURATION_RANGES.get(shot_type)
-        if expected:
-            lo, hi = expected
-            if dur < lo - 0.5 or dur > hi + 0.5:
-                errors.append(
-                    f"[WARN] A8: shot {sid} ({shot_type}) duration_suggest={dur}s, "
-                    f"recommended {lo}-{hi}s"
-                )
 
     has_fail = any(e.startswith("[FAIL]") for e in errors)
     return (not has_fail, errors)

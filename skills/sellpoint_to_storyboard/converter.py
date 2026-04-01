@@ -47,8 +47,7 @@ JSON_SCHEMA = """
           "type": "Wide",
           "purpose": "整体氛围展示",
           "prompt_cn": "完整的中文提示词（套用SECTION D公式）",
-          "motion_hint": "缓慢向前推进，从左至右平移",
-          "duration_suggest": 3.5
+          "motion_hint": "缓慢向前推进，从左至右平移"
         }
       ]
     }
@@ -63,10 +62,9 @@ JSON_SCHEMA = """
 4. director_plan 必须包含 Tier 1/2/3 的镜头分配规划。
 5. environment_anchor 同一场景组内必须完全一致，包含完整的环境描述。
 6. 只输出中文提示词（prompt_cn），不要输出英文。不要输出 markdown 代码块标记，直接输出纯 JSON。
-7. 每个 shot 必须包含 motion_hint（相机运动描述）和 duration_suggest（建议时长秒数）。
+7. 每个 shot 必须包含 motion_hint（相机运动描述）。
 8. motion_hint 示例：全景用"缓慢推进"/"平移"，中景用"跟踪拍摄"，特写用"固定微推"。
-9. duration_suggest 范围：全景 3-4s，中景 2-3s，近景 2-3s，特写 1.5-2s。
-10. prompt_cn 必须套用 SECTION D 的提示词公式，道具按景别递减法则填入。
+9. prompt_cn 必须套用 SECTION D 的提示词公式，道具按景别递减法则填入。
 """
 
 
