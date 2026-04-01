@@ -101,12 +101,5 @@ def validate_storyboard(data: dict[str, Any]) -> tuple[bool, list[str]]:
                 f"[FAIL] A5: scene_group '{sg.get('name', '?')}' missing environment_anchor"
             )
 
-    # --- A7: motion_hint ---
-    for s in all_shots:
-        sid = s.get("shot_id", "?")
-        hint = s.get("motion_hint", "")
-        if not hint or not hint.strip():
-            errors.append(f"[FAIL] A7: shot {sid} missing motion_hint")
-
     has_fail = any(e.startswith("[FAIL]") for e in errors)
     return (not has_fail, errors)

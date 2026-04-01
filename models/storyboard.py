@@ -9,7 +9,6 @@ class Shot(BaseModel):
     type: str  # "Wide" | "Medium" | "Close" | "Macro"
     purpose: str
     prompt_cn: str
-    motion_hint: str = ""  # e.g. "缓慢推进，从左至右平移"
 
 
 class SceneGroup(BaseModel):
