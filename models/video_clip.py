@@ -30,5 +30,10 @@ class ClipAnalysis(BaseModel):
     usable_start: float = 0.0
     usable_end: float = 0.0
     is_rejected: bool = False
-    # VideoDB analysis result
-    scene_description: str = ""
+    # Storyboard 关联（来自 Skill 1 + Skill 4）
+    shot_id: int = 0
+    shot_type: str = ""          # Wide / Medium / Close / Macro
+    purpose: str = ""
+    scene_group_id: int = 0
+    motion_prompt: str = ""      # 来自 Skill 4，含运镜方向信息
+    scene_description: str = ""  # 预留：VideoDB 降级方案

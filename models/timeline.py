@@ -11,7 +11,9 @@ class TimelineClip(BaseModel):
     trim_start: float = 0.0
     trim_end: float = 0.0
     display_duration: float = 2.5
+    speed_factor: float = Field(default=1.0, ge=1.0, le=2.0)  # 1.0-2.0x，禁止慢放
     subtitle_text: str = ""
+    subtitle_text_cn: str = ""   # 中文回译，与英文严格对应
     subtitle_style: str = "selling_point"  # "title" | "selling_point"
     transition_in: str = "cut"  # "cut" | "fade" | "dissolve"
     transition_out: str = "cut"

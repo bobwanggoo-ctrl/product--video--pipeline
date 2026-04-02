@@ -52,10 +52,29 @@
 | 2 | 技能1: 卖点→分镜 | ✅ 完成 | 迁移优化转换器、拆分规则、添加运动提示、验证器、Type A/B 测试通过 |
 | 3 | 技能3: 合规性检查 | ⬚ 待开发 | Gemini Vision 多模态比对，PASS/WARN/FAIL 判定 |
 | 4 | 技能2: 分镜→画面帧 | ⬚ 待开发 | AI 图像生成 + 三层提示词控制 |
-| 5 | 技能4: 画面帧→视频 | ⬚ 待开发 | Kling AI 集成 + 运动规划器 |
-| 6 | 流水线编排器 | ⬚ 待开发 | 串联所有技能、半自动模式、状态管理 |
-| 7 | 技能5: 自动剪辑 | ⬚ 待开发 | VideoDB 分析、LLM 剪辑决策、ffmpeg 拼接、EDL 导出 |
+| 5 | 技能4: 画面帧→视频 | 🔧 运镜规划器完成 | 场景感知运镜选择 + 三层结构(镜头/主体/背景)，Kling API 调用待接入 |
+| 6 | 流水线编排器 | ⬚ 待开发 | 串联所有技能、半自动模式、状态管理（需所有 Skill 跑通后提炼） |
+| 7 | 技能5: 自动剪辑 | 🔨 开发中 | Module A(FFmpeg分析+LLM决策) + Module B(组装+导出)，详见下方 |
 | 8 | 端到端测试与优化 | ⬚ 待开发 | 全流水线测试、错误处理、用户体验打磨 |
+
+### 技能5 详细进度
+
+| Phase | 内容 | 状态 |
+|-------|------|------|
+| 1 | 数据模型补充（ClipAnalysis/TimelineClip 加字段） | ⬚ 待开发 |
+| 2 | editing_rules.md + subtitle_rules.md | ⬚ 待开发 |
+| 3 | video_analyzer.py + bgm_scanner.py | ⬚ 待开发 |
+| 4 | llm_editor.py（剪辑决策 + 时长校验） | ⬚ 待开发 |
+| 5 | subtitle_gen.py（SRT 生成） | ⬚ 待开发 |
+| 6 | ffmpeg_assembler.py（变速 + per-clip 转场 + 字幕烧录 + BGM） | ⬚ 待开发 |
+| 7 | edl_exporter.py（剪映 JSON + FCPXML） | ⬚ 待开发 |
+| 8 | 合并测试 | ⬚ 待开发 |
+
+**关键决策：**
+- 视频分析：FFmpeg + Storyboard（不用 VideoDB，降级方案：加 LLM 故事脚本 → VideoDB）
+- 变速：1.0-2.0x 加速only，禁止慢放（AI 视频帧率不够）
+- 变速后时长 ≥ 1.5s（防止切得太快）
+- 输出：MP4 成品(字幕烧录+BGM) + 剪映 JSON + FCPXML（字幕/BGM 作独立轨道）
 
 ## 架构 / Architecture
 
