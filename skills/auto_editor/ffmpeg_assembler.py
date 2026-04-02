@@ -56,19 +56,21 @@ def assemble(
         # 变速兜底校验
         speed = _safe_speed(clip.speed_factor, clip.trim_end - clip.trim_start, clip.shot_id)
 
-        # 构建 ffmpeg 滤镜
-        filters = []
+        # 构建 ffmpeg 滤镜（始终包含 setpts 重置时间戳，xfade 需要 PTS 从 0 开始）
+        vf_parts = ["setpts=PTS-STARTPTS"]
         if speed != 1.0:
-            filters.append(f"setpts=PTS/{speed}")
+            vf_parts.append(f"setpts=PTS/{speed}")
 
         # trim + 变速 + 去音频
-        filter_arg = ["-vf", ",".join(filters)] if filters else []
+        # 注意：-ss 放在 -i 之前是 input seeking（快速但 PTS 可能不从 0 开始）
+        # 加 setpts=PTS-STARTPTS 强制重置
+        trimmed_duration = clip.trim_end - clip.trim_start
         run_ffmpeg([
-            "-i", clip.source_path,
             "-ss", f"{clip.trim_start:.3f}",
-            "-to", f"{clip.trim_end:.3f}",
+            "-i", clip.source_path,
+            "-t", f"{trimmed_duration:.3f}",
             "-an",
-            *filter_arg,
+            "-vf", ",".join(vf_parts),
             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
             out_file,
         ])
@@ -93,14 +95,17 @@ def assemble(
         transitions=transitions,
     )
 
-    # Step 3: 字幕烧录（如有 SRT）
-    if srt_path and Path(srt_path).exists():
+    # Step 3: 字幕烧录（如有 SRT 且 ffmpeg 支持 drawtext）
+    if srt_path and Path(srt_path).exists() and _has_drawtext_support():
         logger.info("Step 3: 烧录字幕")
         subtitled_out = str(workdir / "subtitled.mp4")
         _burn_subtitles(concat_out, srt_path, subtitled_out)
         current_output = subtitled_out
     else:
-        logger.info("Step 3: 跳过字幕烧录（无 SRT 文件）")
+        if srt_path and Path(srt_path).exists():
+            logger.info("Step 3: 跳过字幕烧录（ffmpeg 缺少 drawtext 滤镜，字幕仅输出 SRT 文件）")
+        else:
+            logger.info("Step 3: 跳过字幕烧录（无 SRT 文件）")
         current_output = concat_out
 
     # Step 4: 混入 BGM
@@ -161,14 +166,86 @@ def _safe_speed(speed_factor: float, trimmed_duration: float, shot_id: int) -> f
 
 
 def _burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
-    """用 ffmpeg subtitles 滤镜烧录 SRT 字幕到视频。"""
-    # 使用 subtitles 滤镜，自动处理字体和样式
-    # 路径中的特殊字符需要转义
-    escaped_srt = str(srt_path).replace("\\", "\\\\").replace(":", "\\:")
+    """用 ffmpeg drawtext 滤镜逐条烧录 SRT 字幕到视频。
+
+    使用 filter_script 文件避免 shell 转义问题。
+    """
+    entries = _parse_srt(srt_path)
+    if not entries:
+        run_ffmpeg(["-i", video_path, "-c", "copy", output_path])
+        return
+
+    # 构建 drawtext filter chain，写入 filter script 文件
+    filters = []
+    for entry in entries:
+        text = (entry["text"]
+                .replace("\\", "\\\\")
+                .replace("'", "\u2019")
+                .replace(":", "\\:")
+                .replace("%", "%%"))
+        start = entry["start"]
+        end = entry["end"]
+        filters.append(
+            f"drawtext=text='{text}'"
+            f":fontsize=40:fontcolor=white:borderw=3:bordercolor=black"
+            f":x=(w-text_w)/2:y=h-th-60"
+            f":enable='between(t,{start:.3f},{end:.3f})'"
+        )
+
+    filter_str = ",".join(filters)
+
+    # 写入临时 filter script 文件（避免命令行转义问题）
+    script_path = Path(video_path).parent / "filter_script.txt"
+    script_path.write_text(filter_str, encoding="utf-8")
+
     run_ffmpeg([
         "-i", video_path,
-        "-vf", f"subtitles='{escaped_srt}':force_style='FontSize=22,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,Outline=2,Bold=1'",
+        "-filter_script:v", str(script_path),
         "-c:v", "libx264", "-preset", "fast", "-crf", "18",
         "-c:a", "copy",
         output_path,
     ])
+
+
+def _parse_srt(srt_path: str) -> list[dict]:
+    """解析 SRT 文件，返回 [{start, end, text}, ...]。"""
+    import re
+
+    content = Path(srt_path).read_text(encoding="utf-8")
+    entries = []
+
+    # SRT 格式: index\nHH:MM:SS,mmm --> HH:MM:SS,mmm\ntext\n
+    blocks = re.split(r'\n\n+', content.strip())
+    for block in blocks:
+        lines = block.strip().split('\n')
+        if len(lines) < 3:
+            continue
+
+        time_match = re.match(
+            r'(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})',
+            lines[1]
+        )
+        if not time_match:
+            continue
+
+        g = time_match.groups()
+        start = int(g[0]) * 3600 + int(g[1]) * 60 + int(g[2]) + int(g[3]) / 1000
+        end = int(g[4]) * 3600 + int(g[5]) * 60 + int(g[6]) + int(g[7]) / 1000
+        text = " ".join(lines[2:])
+
+        entries.append({"start": start, "end": end, "text": text})
+
+    return entries
+
+
+def _has_drawtext_support() -> bool:
+    """检查 ffmpeg 是否编译了 drawtext 滤镜（依赖 libfreetype）。"""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-filters"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return "drawtext" in result.stdout
+    except Exception:
+        return False

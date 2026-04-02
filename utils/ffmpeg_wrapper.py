@@ -105,23 +105,23 @@ def concat_with_xfade(
         inputs.extend(["-i", str(p)])
 
     # 构建 xfade filter chain（per-clip 转场）
-    # offset 表示当前 xfade 在输出时间线上的位置
+    # xfade offset = 到目前为止合成流的总时长 - 当前转场重叠时长
+    # 合成流总时长在每次 xfade 后更新为: prev_total + clip_dur - t_dur
     filter_parts = []
     prev_label = "[0:v]"
-    offset = clip_durations[0]  # 第一个片段结束的时间点
+    composed_duration = clip_durations[0]  # 当前合成流的总时长
 
     for i in range(1, len(input_paths)):
         t = transitions[i - 1]
         t_type = t.get("type", "cut")
-        t_dur = float(t.get("duration", 0.4)) if t_type != "cut" else 0.001
+        t_dur = float(t.get("duration", 0.4)) if t_type != "cut" else 0.05
+        # cut 用 0.05s 极短 fade 模拟（0.001 会因浮点精度导致 xfade 截断）
 
-        # xfade offset = 上一段结束时间 - 转场重叠时长
-        xfade_offset = offset - t_dur
+        xfade_offset = composed_duration - t_dur
 
         out_label = f"[v{i-1}{i}]" if i < len(input_paths) - 1 else "[vout]"
         cur_label = f"[{i}:v]"
 
-        # 映射转场类型到 ffmpeg xfade 支持的名称
         xfade_name = t_type if t_type in (
             "fade", "dissolve", "wipeleft", "wiperight", "wipeup", "wipedown",
             "slideleft", "slideright", "slideup", "slidedown",
@@ -135,10 +135,7 @@ def concat_with_xfade(
         )
 
         prev_label = out_label
-        # 累加当前片段时长（减去转场重叠）
-        offset = xfade_offset + t_dur + clip_durations[i] - t_dur
-        # 简化: offset += clip_durations[i] - t_dur  但需要从 xfade_offset 基准算
-        offset = xfade_offset + clip_durations[i]
+        composed_duration = xfade_offset + t_dur + clip_durations[i] - t_dur
 
     run_ffmpeg(inputs + [
         "-filter_complex", ";".join(filter_parts),
