@@ -36,8 +36,11 @@ def generate_srt(
         text = _get_subtitle_text(clip.subtitle_text, clip.subtitle_text_cn, language)
 
         if text:
+            # 字幕结束时间 = 当前时间 + 展示时长 - 转场重叠
+            # 避免相邻字幕在 xfade 重叠区域同时显示
+            overlap = clip.transition_duration if clip.transition_out != "cut" else 0.0
             start = current_time
-            end = current_time + clip.display_duration
+            end = current_time + clip.display_duration - overlap
             entries.append(
                 f"{index}\n"
                 f"{_format_srt_time(start)} --> {_format_srt_time(end)}\n"

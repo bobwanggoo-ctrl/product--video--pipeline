@@ -54,7 +54,7 @@ def trim_video(input_path: str, output_path: str, start: float, end: float) -> s
         "-ss", f"{start:.3f}",
         "-to", f"{end:.3f}",
         "-an",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast", "-crf", "18",
         str(output_path),
     ])
     return output_path
@@ -122,12 +122,27 @@ def concat_with_xfade(
         out_label = f"[v{i-1}{i}]" if i < len(input_paths) - 1 else "[vout]"
         cur_label = f"[{i}:v]"
 
-        xfade_name = t_type if t_type in (
-            "fade", "dissolve", "wipeleft", "wiperight", "wipeup", "wipedown",
-            "slideleft", "slideright", "slideup", "slidedown",
-            "circlecrop", "rectcrop", "distance", "fadeblack", "fadewhite",
-            "radial", "smoothleft", "smoothright", "smoothup", "smoothdown",
-        ) else "fade"
+        # 我们的命名 → ffmpeg xfade transition 名称映射
+        # "dissolve" 在我们系统中 = 交叉溶解，对应 ffmpeg 的 "fade"
+        # ffmpeg 的 "dissolve" 实际是随机像素溶解（噪点效果），不要用
+        XFADE_NAME_MAP = {
+            "dissolve": "fade",       # 交叉溶解 → ffmpeg fade
+            "fade": "fade",           # 淡入淡出
+            "fadeblack": "fadeblack",  # 经黑场过渡
+            "fadewhite": "fadewhite",  # 经白场过渡
+            "wipeleft": "wipeleft",
+            "wiperight": "wiperight",
+            "wipeup": "wipeup",
+            "wipedown": "wipedown",
+            "slideleft": "slideleft",
+            "slideright": "slideright",
+            "slideup": "slideup",
+            "slidedown": "slidedown",
+            "circlecrop": "circlecrop",
+            "smoothleft": "smoothleft",
+            "smoothright": "smoothright",
+        }
+        xfade_name = XFADE_NAME_MAP.get(t_type, "fade")
 
         filter_parts.append(
             f"{prev_label}{cur_label}xfade=transition={xfade_name}"
@@ -140,7 +155,7 @@ def concat_with_xfade(
     run_ffmpeg(inputs + [
         "-filter_complex", ";".join(filter_parts),
         "-map", "[vout]",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast", "-crf", "18",
         str(output_path),
     ])
     return output_path

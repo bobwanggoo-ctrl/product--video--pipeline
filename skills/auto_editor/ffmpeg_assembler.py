@@ -71,7 +71,7 @@ def assemble(
             "-t", f"{trimmed_duration:.3f}",
             "-an",
             "-vf", ",".join(vf_parts),
-            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast", "-crf", "18",
             out_file,
         ])
 
@@ -94,6 +94,21 @@ def assemble(
         clip_durations=processed_durations,
         transitions=transitions,
     )
+
+    # Step 2.5: 结尾淡出黑场（如果最后一个 clip 的 transition_out 是 fade）
+    last_clip = timeline.clips[-1]
+    if last_clip.transition_out == "fade":
+        logger.info("Step 2.5: 结尾淡出黑场")
+        fade_out_path = str(workdir / "fade_out.mp4")
+        concat_duration = get_video_info(concat_out)["duration"]
+        fade_start = max(0, concat_duration - last_clip.transition_duration)
+        run_ffmpeg([
+            "-i", concat_out,
+            "-vf", f"fade=t=out:st={fade_start:.3f}:d={last_clip.transition_duration:.3f}",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast", "-crf", "18",
+            fade_out_path,
+        ])
+        concat_out = fade_out_path
 
     # Step 3: 字幕烧录（如有 SRT 且 ffmpeg 支持 drawtext）
     if srt_path and Path(srt_path).exists() and _has_drawtext_support():
@@ -178,15 +193,30 @@ def _burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
     # 构建 drawtext filter chain，写入 filter script 文件
     filters = []
     for entry in entries:
+        # drawtext 特殊字符转义：
+        # \ → \\, ' → \u2019, : → \:, % → %%, ; → \;
+        # 另外 filter_script 模式中还需转义 , → \,（逗号分隔滤镜）
         text = (entry["text"]
                 .replace("\\", "\\\\")
                 .replace("'", "\u2019")
                 .replace(":", "\\:")
-                .replace("%", "%%"))
+                .replace("%", "%%")
+                .replace(";", "\\;")
+                .replace("&", "\\&")
+                .replace("!", "\\!")
+                .replace("[", "\\[")
+                .replace("]", "\\]")
+                .replace("=", "\\=")
+                )
         start = entry["start"]
         end = entry["end"]
+        # macOS 系统字体路径（支持中英文混排）
+        fontfile = "/Library/Fonts/Arial Unicode.ttf"
+        fontfile_escaped = fontfile.replace(":", "\\:").replace(" ", "\\ ")
+
         filters.append(
             f"drawtext=text='{text}'"
+            f":fontfile='{fontfile_escaped}'"
             f":fontsize=40:fontcolor=white:borderw=3:bordercolor=black"
             f":x=(w-text_w)/2:y=h-th-60"
             f":enable='between(t,{start:.3f},{end:.3f})'"
@@ -201,7 +231,7 @@ def _burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
     run_ffmpeg([
         "-i", video_path,
         "-filter_script:v", str(script_path),
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast", "-crf", "18",
         "-c:a", "copy",
         output_path,
     ])
