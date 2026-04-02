@@ -52,9 +52,13 @@ def build_user_message(
     clip_info = []
     for c in clips:
         status = "废片" if c.is_rejected else "可用"
+        quality = f"质量={c.quality_score:.1f}" if c.quality_score >= 0 else "未检测"
+        issues = f" 问题:[{c.quality_issues}]" if c.quality_issues else ""
+        desc = f" 画面:{c.scene_description}" if c.scene_description else ""
         clip_info.append(
             f"  Shot {c.shot_id} | {c.shot_type:6s} | {c.duration:.1f}s | "
-            f"{status} | 目的: {c.purpose} | 运镜: {c.motion_prompt[:50]}"
+            f"{status} | {quality}{issues}{desc} | "
+            f"目的: {c.purpose} | 运镜: {c.motion_prompt[:50]}"
         )
 
     # BGM 列表
@@ -173,9 +177,17 @@ def _build_timeline(
         raise ValueError("LLM 输出中没有 clips 数组")
 
     timeline_clips: list[TimelineClip] = []
+    seen_shot_ids: set[int] = set()
+    seen_source_paths: set[str] = set()
 
     for rc in raw_clips:
         shot_id = rc["shot_id"]
+
+        # 去重校验：shot_id
+        if shot_id in seen_shot_ids:
+            logger.warning(f"Shot {shot_id} 重复出现，跳过")
+            continue
+
         source_clip = clip_map.get(shot_id)
 
         if not source_clip:
@@ -183,6 +195,12 @@ def _build_timeline(
             continue
         if source_clip.is_rejected:
             logger.warning(f"Shot {shot_id} 是废片，跳过")
+            continue
+
+        # 去重校验：source_path（不同 shot_id 可能对应同一个视频文件）
+        src = source_clip.file_path
+        if src in seen_source_paths:
+            logger.warning(f"Shot {shot_id} 的源文件已被其他片段使用，跳过: {src}")
             continue
 
         # 解析 trim 范围
@@ -215,6 +233,8 @@ def _build_timeline(
             transition_out=rc.get("transition_out", "cut"),
             transition_duration=float(rc.get("transition_duration", 0.4)),
         ))
+        seen_shot_ids.add(shot_id)
+        seen_source_paths.add(src)
 
     if not timeline_clips:
         raise ValueError("校验后没有可用片段")
@@ -238,6 +258,13 @@ def _build_timeline(
                 f"Cut 转场比例 {cut_ratio:.0%} ({cut_count}/{total_transitions}) "
                 f"低于 70% 底线，节奏可能过拖"
             )
+
+    # 字幕密度校验：不应所有 clip 都有字幕
+    clips_with_sub = sum(1 for c in timeline_clips if c.subtitle_text)
+    if clips_with_sub == len(timeline_clips) and len(timeline_clips) > 3:
+        logger.warning(
+            f"所有 {clips_with_sub} 个片段都有字幕，建议留 1-3 个纯画面片段"
+        )
 
     # 解析 BGM
     bgm_choice = data.get("bgm_choice", "")

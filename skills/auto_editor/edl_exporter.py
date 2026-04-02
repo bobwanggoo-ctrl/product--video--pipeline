@@ -146,8 +146,8 @@ def export_fcpxml(
     Returns:
         输出文件路径。
     """
-    # FCPXML 根元素
-    fcpxml = ET.Element("fcpxml", version="1.11")
+    # FCPXML 根元素（v1.9 兼容 FCP 10.4+）
+    fcpxml = ET.Element("fcpxml", version="1.9")
 
     # 从 timeline 读取 fps 和分辨率
     fps = int(timeline.fps) if timeline.fps == int(timeline.fps) else timeline.fps
@@ -169,22 +169,28 @@ def export_fcpxml(
         "width": width, "height": height,
     })
 
-    # 为每个片段和 BGM 创建 asset
+    # 为每个片段和 BGM 创建 asset（v1.9: src 在 media-rep 子元素中）
     for i, clip in enumerate(timeline.clips):
-        ET.SubElement(resources, "asset", {
+        asset_elem = ET.SubElement(resources, "asset", {
             "id": f"clip_{clip.shot_id}",
             "name": f"Shot {clip.shot_id}",
-            "src": str(Path(clip.source_path).resolve()),
             "hasVideo": "1", "hasAudio": "0",
             "format": "r1",
         })
+        ET.SubElement(asset_elem, "media-rep", {
+            "kind": "original-media",
+            "src": Path(clip.source_path).resolve().as_uri(),
+        })
 
     if timeline.bgm_path:
-        ET.SubElement(resources, "asset", {
+        bgm_asset = ET.SubElement(resources, "asset", {
             "id": "bgm",
             "name": "BGM",
-            "src": str(Path(timeline.bgm_path).resolve()),
             "hasVideo": "0", "hasAudio": "1",
+        })
+        ET.SubElement(bgm_asset, "media-rep", {
+            "kind": "original-media",
+            "src": Path(timeline.bgm_path).resolve().as_uri(),
         })
 
     # library → event → project → sequence
@@ -200,12 +206,11 @@ def export_fcpxml(
 
     spine = ET.SubElement(sequence, "spine")
 
-    # 视频片段 + 字幕叠加
+    # 视频片段（asset-clip 引用 asset）
     for i, clip in enumerate(timeline.clips):
-        trimmed = clip.trim_end - clip.trim_start
-        clip_elem = ET.SubElement(spine, "clip", {
-            "name": f"Shot {clip.shot_id}",
+        clip_elem = ET.SubElement(spine, "asset-clip", {
             "ref": f"clip_{clip.shot_id}",
+            "name": f"Shot {clip.shot_id}",
             "offset": _rational_sec(clip.trim_start),
             "duration": _rational_sec(clip.display_duration),
             "start": _rational_sec(clip.trim_start),
@@ -213,34 +218,23 @@ def export_fcpxml(
 
         # 转场
         if i > 0 and clip.transition_in != "cut":
-            transition = ET.SubElement(spine, "transition", {
+            ET.SubElement(spine, "transition", {
                 "name": clip.transition_in.capitalize(),
                 "duration": _rational_sec(clip.transition_duration),
             })
 
-        # 字幕作为 title 叠加
-        if clip.subtitle_text:
-            title = ET.SubElement(clip_elem, "title", {
-                "name": clip.subtitle_text[:30],
-                "duration": _rational_sec(clip.display_duration),
-            })
-            text_elem = ET.SubElement(title, "text")
-            text_style = ET.SubElement(text_elem, "text-style", {
-                "font": "Helvetica",
-                "fontSize": "48",
-                "fontColor": "1 1 1 1",
-            })
-            text_style.text = clip.subtitle_text
-
-    # BGM 音频轨道
+    # BGM 音频轨道（asset-clip，lane=-1 表示音频轨）
     if timeline.bgm_path:
-        bgm_clip = ET.SubElement(spine, "clip", {
-            "name": "BGM",
+        ET.SubElement(spine, "asset-clip", {
             "ref": "bgm",
+            "name": "BGM",
             "lane": "-1",
             "offset": "0s",
             "duration": _rational_sec(timeline.total_duration),
         })
+
+    # 注：字幕不嵌入 FCPXML（需要 Motion template），以独立 SRT 文件提供
+    # 用户可在 FCP 中通过 File → Import → Captions 导入 SRT
 
     # 写入文件
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)

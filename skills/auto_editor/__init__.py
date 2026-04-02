@@ -60,7 +60,11 @@ def run(
     logger.info("=" * 60)
     logger.info("Skill 5 Step 1/4: 视频片段分析")
     logger.info("=" * 60)
-    clip_analyses = analyze_clips(video_paths, storyboard, motion_results)
+    clip_analyses = analyze_clips(
+        video_paths, storyboard, motion_results,
+        enable_vision=False,
+        preferred_llm=preferred_llm,
+    )
     logger.info(f"  分析完成: {len(clip_analyses)} 个片段")
 
     logger.info("Skill 5 Step 2/4: BGM 扫描")

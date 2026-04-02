@@ -13,8 +13,10 @@
 
 ### A2. 片段选择
 - 从 15 个候选片段中选取 **8-12 个**用于成片（其余标记为 rejected）。
+- **每个 shot_id 只能使用一次，绝对不得重复选用同一个片段。**
 - 每个选中片段的变速后展示时长 **≥ 1.5 秒**。
 - 标记为 `is_rejected=true` 的废片不得使用。
+- 如果片段附带 quality_score（视觉质量评分），优先选用高分片段，低分片段应标记为 rejected 并注明理由。
 
 ### A3. 变速约束
 - speed_factor 取值范围：**1.0 / 1.25 / 1.5 / 1.75 / 2.0**。
@@ -27,7 +29,6 @@
 - 转场类型：`cut`（硬切）、`dissolve`（溶解）、`fade`（淡入淡出）。
 - 比例约束：约 **80% cut / 15% dissolve / 5% fade**。
 - 转场时长：dissolve 和 fade 为 0.3-0.5 秒，cut 为 0 秒。
-- 开头第一个镜头的 transition_in 必须为 `fade`（从黑场淡入）。
 - 结尾最后一个镜头的 transition_out 必须为 `fade`（淡出到黑场）。
 
 ### A5. 景别节奏
@@ -39,7 +40,7 @@
 ### A6. 音频
 - **全部剥离原声**：所有素材进入剪辑流程时必须无音频。
 - 统一混入 BGM，BGM 时长必须 ≥ 成片总时长。
-- BGM 最后 2 秒执行淡出。
+- BGM 最后 1.5 秒执行淡出。
 
 ### A7. 时长校验公式
 对每个选中片段，LLM 必须计算并输出：
@@ -138,3 +139,5 @@ display_duration = trimmed_duration / speed_factor
 4. subtitle_style 为 "title"（开头/结尾大字）或 "selling_point"（卖点小字）。
 5. total_duration 必须在 20-30 秒内，且等于所有 display_duration 之和减去转场重叠。
 6. duration_breakdown 用文字说明每个片段的时长计算过程，便于校验。
+7. **不是每个 clip 都需要字幕**：至少 1-3 个 clip 的 subtitle_text 和 subtitle_text_cn 为空字符串 ""。纯视觉过渡镜头、快节奏剪辑段落不需要字幕，让画面自己说话。
+8. **每个 shot_id 只能使用一次**，不得重复选用同一个片段。

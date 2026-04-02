@@ -39,6 +39,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-chat")
 
+# --- LLM: Reverse Prompt (tu-zi 中转) ---
+REVERSE_PROMPT_API_KEY = os.getenv("REVERSE_PROMPT_API_KEY", "")
+REVERSE_PROMPT_BASE_URL = os.getenv("REVERSE_PROMPT_BASE_URL", "https://api.tu-zi.com/v1")
+REVERSE_PROMPT_PATH = os.getenv("REVERSE_PROMPT_PATH", "/chat/completions")
+REVERSE_PROMPT_MODEL = os.getenv("REVERSE_PROMPT_MODEL", "gemini-3-flash-preview")
+
 # --- Image Generation ---
 GEMINI_IMAGE_API_KEY = os.getenv("GEMINI_IMAGE_API_KEY", "")
 GEMINI_IMAGE_BASE_URL = os.getenv("GEMINI_IMAGE_BASE_URL", "")

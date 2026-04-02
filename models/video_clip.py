@@ -36,4 +36,7 @@ class ClipAnalysis(BaseModel):
     purpose: str = ""
     scene_group_id: int = 0
     motion_prompt: str = ""      # 来自 Skill 4，含运镜方向信息
-    scene_description: str = ""  # 预留：VideoDB 降级方案
+    scene_description: str = ""  # Vision 识别的画面描述
+    prompt_cn: str = ""          # Storyboard 中文提示词（生成时的意图）
+    quality_score: float = -1.0  # Vision 质量评分 0-10，-1 表示未检测
+    quality_issues: str = ""     # Vision 发现的问题描述

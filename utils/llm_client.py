@@ -40,14 +40,18 @@ class LLMClient:
             return self._call_gemini(system_prompt, user_message, preferred_route, temperature, max_tokens, json_mode)
         if choice in ("deepseek", "openai"):
             return self._call_openai(system_prompt, user_message, temperature, max_tokens, json_mode)
+        if choice in ("reverse", "reverse_prompt", "tuzi"):
+            return self._call_reverse_prompt(system_prompt, user_message, temperature, max_tokens, json_mode)
 
-        # Auto: Gemini first, then OpenAI/DeepSeek
+        # Auto: Gemini first, then Reverse Prompt, then OpenAI/DeepSeek
         if settings.GEMINI_API_KEY or settings.GEMINI_SELLPOINT_APP_KEY:
             return self._call_gemini(system_prompt, user_message, preferred_route, temperature, max_tokens, json_mode)
+        if settings.REVERSE_PROMPT_API_KEY:
+            return self._call_reverse_prompt(system_prompt, user_message, temperature, max_tokens, json_mode)
         if settings.OPENAI_API_KEY:
             return self._call_openai(system_prompt, user_message, temperature, max_tokens, json_mode)
 
-        raise ValueError("No LLM API key configured. Set GEMINI_API_KEY or OPENAI_API_KEY in .env")
+        raise ValueError("No LLM API key configured. Set GEMINI_API_KEY, REVERSE_PROMPT_API_KEY, or OPENAI_API_KEY in .env")
 
     def call_vision(
         self,
@@ -296,6 +300,67 @@ class LLMClient:
         if not content:
             raise ValueError("OpenAI returned empty content.")
         return content
+
+    def _call_reverse_prompt(
+        self, system_prompt: str, user_message: str,
+        temperature: float, max_tokens: int, json_mode: bool,
+    ) -> str:
+        """Call Reverse Prompt (tu-zi) OpenAI-compatible API."""
+        base_url = settings.REVERSE_PROMPT_BASE_URL.rstrip("/")
+        path = settings.REVERSE_PROMPT_PATH
+        model = settings.REVERSE_PROMPT_MODEL
+        url = f"{base_url}{path}"
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.REVERSE_PROMPT_API_KEY}",
+        }
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        started_at = time.perf_counter()
+        logger.info(f"[LLM][START][ReversePrompt] model={model} url={url}")
+
+        last_exc = None
+        for attempt in range(1, 4):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=(10, 180))
+                resp.raise_for_status()
+                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                logger.info(f"[LLM][END][ReversePrompt] model={model} elapsed_ms={elapsed_ms} attempt={attempt}")
+                break
+            except requests.exceptions.RequestException as e:
+                last_exc = e
+                is_retryable = (
+                    isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+                    or (hasattr(e, "response") and e.response is not None and e.response.status_code in (429, 503))
+                )
+                if is_retryable and attempt < 3:
+                    sleep_sec = 1.5 * (2 ** (attempt - 1))
+                    logger.warning(f"[LLM][RETRY][ReversePrompt] attempt={attempt} sleep={sleep_sec:.1f}s")
+                    time.sleep(sleep_sec)
+                    continue
+                raise RuntimeError(f"ReversePrompt request failed: {e}") from e
+        else:
+            raise RuntimeError(f"ReversePrompt request failed after retries: {last_exc}")
+
+        data = resp.json()
+        choices = data.get("choices", [])
+        if not choices:
+            raise ValueError(f"No choices in response: {data}")
+        content = (choices[0].get("message") or {}).get("content", "").strip()
+        if not content:
+            raise ValueError(f"Empty content in response: {data}")
+        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', content)
 
 
 # Singleton

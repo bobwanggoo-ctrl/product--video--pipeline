@@ -1,7 +1,7 @@
 """Skill 5 Module A: 视频片段技术分析。
 
 用 FFmpeg 获取每个片段的技术参数，关联 Storyboard 内容数据，
-输出 ClipAnalysis 列表供 LLM 剪辑决策使用。
+可选 Vision 质量检测，输出 ClipAnalysis 列表供 LLM 剪辑决策使用。
 """
 
 import logging
@@ -18,6 +18,9 @@ def analyze_clips(
     video_paths: list[str],
     storyboard: Storyboard,
     motion_results: list[dict] | None = None,
+    *,
+    enable_vision: bool = True,
+    preferred_llm: str | None = None,
 ) -> list[ClipAnalysis]:
     """分析所有视频片段，返回 ClipAnalysis 列表。
 
@@ -39,6 +42,7 @@ def analyze_clips(
                 "shot_type": shot.type,
                 "purpose": shot.purpose,
                 "scene_group_id": sg.scene_group_id,
+                "prompt_cn": shot.prompt_cn,
             })
 
     # 构建 motion_prompt 查找表
@@ -85,6 +89,7 @@ def analyze_clips(
             purpose=shot_info.get("purpose", ""),
             scene_group_id=shot_info.get("scene_group_id", 0),
             motion_prompt=motion_map.get(shot_id, ""),
+            prompt_cn=shot_info.get("prompt_cn", ""),
         ))
 
         if is_rejected:
@@ -98,7 +103,51 @@ def analyze_clips(
     usable = sum(1 for r in results if not r.is_rejected)
     rejected = sum(1 for r in results if r.is_rejected)
     logger.info(f"分析完成: {len(results)} 个片段, {usable} 个可用, {rejected} 个废片")
+
+    # Vision 质量检测（可选）
+    if enable_vision:
+        _run_vision_check(results, preferred_llm=preferred_llm)
+
     return results
+
+
+def _run_vision_check(
+    results: list[ClipAnalysis],
+    *,
+    preferred_llm: str | None = None,
+) -> None:
+    """对可用片段执行 Vision 质量检测，更新 ClipAnalysis 字段。"""
+    from .vision_checker import batch_check
+
+    usable = [r for r in results if not r.is_rejected]
+    if not usable:
+        return
+
+    logger.info(f"Vision 质量检测: {len(usable)} 个片段")
+    vision_results = batch_check(
+        [r.file_path for r in usable],
+        intents=[r.prompt_cn or r.purpose for r in usable],
+        preferred_llm=preferred_llm,
+    )
+
+    for clip, vr in zip(usable, vision_results):
+        clip.quality_score = vr["quality_score"]
+        clip.scene_description = vr["scene_description"]
+        clip.quality_issues = ", ".join(vr["issues"]) if vr["issues"] else ""
+
+        # Vision 建议废弃 → 标记
+        if vr["recommendation"] == "reject" and vr["quality_score"] >= 0:
+            clip.is_rejected = True
+            logger.warning(
+                f"Shot {clip.shot_id}: Vision 建议废弃 "
+                f"(score={vr['quality_score']:.1f}, issues=[{clip.quality_issues}])"
+            )
+
+    # 更新统计
+    usable_after = sum(1 for r in results if not r.is_rejected)
+    vision_rejected = sum(1 for r in results if r.is_rejected) - sum(1 for r in results if r.is_rejected and r.quality_score < 0)
+    if vision_rejected > 0:
+        logger.info(f"Vision 检测后: {usable_after} 个可用, {vision_rejected} 个被 Vision 废弃")
 
 
 def _make_rejected(
@@ -117,4 +166,5 @@ def _make_rejected(
         purpose=shot_info.get("purpose", ""),
         scene_group_id=shot_info.get("scene_group_id", 0),
         motion_prompt=motion_map.get(shot_id, ""),
+        prompt_cn=shot_info.get("prompt_cn", ""),
     )
