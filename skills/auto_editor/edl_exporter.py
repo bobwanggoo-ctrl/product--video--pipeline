@@ -13,9 +13,9 @@ from models.timeline import EditingTimeline
 
 logger = logging.getLogger(__name__)
 
-# 帧率常量
-FPS = 30
-FRAME_DURATION = 1 / FPS
+
+# 剪映用微秒为时间单位
+_US = 1_000_000
 
 
 # ── 剪映 JSON 导出 ────────────────────────────────────────────
@@ -149,13 +149,24 @@ def export_fcpxml(
     # FCPXML 根元素
     fcpxml = ET.Element("fcpxml", version="1.11")
 
+    # 从 timeline 读取 fps 和分辨率
+    fps = int(timeline.fps) if timeline.fps == int(timeline.fps) else timeline.fps
+    res_parts = timeline.resolution.split("x")
+    width = res_parts[0] if len(res_parts) == 2 else "1920"
+    height = res_parts[1] if len(res_parts) == 2 else "1080"
+
+    def _rational_sec(seconds: float) -> str:
+        """将秒数转为 FCPXML rational time（基于帧数）。"""
+        frames = round(seconds * fps)
+        return f"{frames}/{fps}s"
+
     # resources: 素材引用
     resources = ET.SubElement(fcpxml, "resources")
     format_elem = ET.SubElement(resources, "format", {
         "id": "r1",
-        "name": f"FFVideoFormat1080p{FPS}",
-        "frameDuration": _fcpxml_rational(1, FPS),
-        "width": "1920", "height": "1080",
+        "name": f"FFVideoFormat{height}p{fps}",
+        "frameDuration": f"1/{fps}s",
+        "width": width, "height": height,
     })
 
     # 为每个片段和 BGM 创建 asset
@@ -182,7 +193,7 @@ def export_fcpxml(
     project = ET.SubElement(event, "project", name="Product Video")
     sequence = ET.SubElement(project, "sequence", {
         "format": "r1",
-        "duration": _fcpxml_rational_sec(timeline.total_duration),
+        "duration": _rational_sec(timeline.total_duration),
         "tcStart": "0s",
         "tcFormat": "NDF",
     })
@@ -195,23 +206,23 @@ def export_fcpxml(
         clip_elem = ET.SubElement(spine, "clip", {
             "name": f"Shot {clip.shot_id}",
             "ref": f"clip_{clip.shot_id}",
-            "offset": _fcpxml_rational_sec(clip.trim_start),
-            "duration": _fcpxml_rational_sec(clip.display_duration),
-            "start": _fcpxml_rational_sec(clip.trim_start),
+            "offset": _rational_sec(clip.trim_start),
+            "duration": _rational_sec(clip.display_duration),
+            "start": _rational_sec(clip.trim_start),
         })
 
         # 转场
         if i > 0 and clip.transition_in != "cut":
             transition = ET.SubElement(spine, "transition", {
                 "name": clip.transition_in.capitalize(),
-                "duration": _fcpxml_rational_sec(clip.transition_duration),
+                "duration": _rational_sec(clip.transition_duration),
             })
 
         # 字幕作为 title 叠加
         if clip.subtitle_text:
             title = ET.SubElement(clip_elem, "title", {
                 "name": clip.subtitle_text[:30],
-                "duration": _fcpxml_rational_sec(clip.display_duration),
+                "duration": _rational_sec(clip.display_duration),
             })
             text_elem = ET.SubElement(title, "text")
             text_style = ET.SubElement(text_elem, "text-style", {
@@ -228,7 +239,7 @@ def export_fcpxml(
             "ref": "bgm",
             "lane": "-1",
             "offset": "0s",
-            "duration": _fcpxml_rational_sec(timeline.total_duration),
+            "duration": _rational_sec(timeline.total_duration),
         })
 
     # 写入文件
@@ -239,14 +250,3 @@ def export_fcpxml(
 
     logger.info(f"FCPXML 导出完成: {output_path}")
     return output_path
-
-
-def _fcpxml_rational(num: int, den: int) -> str:
-    """FCPXML rational time format: num/den_s。"""
-    return f"{num}/{den}s"
-
-
-def _fcpxml_rational_sec(seconds: float) -> str:
-    """将秒数转为 FCPXML rational time（基于帧数）。"""
-    frames = round(seconds * FPS)
-    return f"{frames}/{FPS}s"

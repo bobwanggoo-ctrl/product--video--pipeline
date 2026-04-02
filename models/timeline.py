@@ -28,6 +28,7 @@ class EditingTimeline(BaseModel):
     bgm_fade_out_sec: float = 2.0
     total_duration: float = 0.0
     resolution: str = "1920x1080"
+    fps: float = 24.0
 
 
 class BgmInfo(BaseModel):

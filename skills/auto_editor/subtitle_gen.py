@@ -60,6 +60,61 @@ def generate_srt(
     return output_path
 
 
+def generate_srt_from_actual_durations(
+    timeline: EditingTimeline,
+    actual_durations: list[float],
+    output_path: str,
+    *,
+    language: str = "en",
+) -> str:
+    """用实际 ffmpeg 输出时长（而非理论 display_duration）重算字幕时间。
+
+    解决理论时长 vs 实际时长的偏差导致字幕与画面不同步的问题。
+
+    Args:
+        timeline: 剪辑时间线。
+        actual_durations: 每个 clip 经 trim+变速后的实际时长（来自 ffmpeg）。
+        output_path: SRT 输出路径。
+        language: "en"/"cn"/"both"。
+
+    Returns:
+        SRT 文件路径。
+    """
+    if len(actual_durations) != len(timeline.clips):
+        raise ValueError(
+            f"actual_durations 长度 ({len(actual_durations)}) "
+            f"与 clips 数量 ({len(timeline.clips)}) 不一致"
+        )
+
+    entries: list[str] = []
+    index = 1
+    current_time = 0.0
+
+    for clip, actual_dur in zip(timeline.clips, actual_durations):
+        text = _get_subtitle_text(clip.subtitle_text, clip.subtitle_text_cn, language)
+
+        if text:
+            overlap = clip.transition_duration if clip.transition_out != "cut" else 0.0
+            start = current_time
+            end = current_time + actual_dur - overlap
+            entries.append(
+                f"{index}\n"
+                f"{_format_srt_time(start)} --> {_format_srt_time(end)}\n"
+                f"{text}\n"
+            )
+            index += 1
+
+        # 用实际时长计算下一个 clip 起始时间
+        overlap = clip.transition_duration if clip.transition_out != "cut" else 0.0
+        current_time += actual_dur - overlap
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_path).write_text("\n".join(entries), encoding="utf-8")
+
+    logger.info(f"SRT（实际时长）生成完成: {index - 1} 条字幕 → {output_path}")
+    return output_path
+
+
 def generate_dual_srt(
     timeline: EditingTimeline,
     output_dir: str,

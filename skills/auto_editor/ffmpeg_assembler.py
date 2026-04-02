@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 from models.timeline import EditingTimeline
+from skills.auto_editor.subtitle_gen import generate_srt_from_actual_durations
 from utils.ffmpeg_wrapper import (
     concat_with_xfade, mix_bgm, run_ffmpeg, get_video_info,
 )
@@ -18,6 +19,11 @@ logger = logging.getLogger(__name__)
 # 变速后最小展示时长（兜底校验，与 llm_editor 一致）
 MIN_DISPLAY_DURATION = 1.5
 VALID_SPEED_FACTORS = [1.0, 1.25, 1.5, 1.75, 2.0]
+
+# 字幕字体路径（macOS 系统默认，可通过环境变量 SUBTITLE_FONT 覆盖）
+import os
+DEFAULT_FONT_PATH = "/Library/Fonts/Arial Unicode.ttf"
+SUBTITLE_FONT = os.environ.get("SUBTITLE_FONT", DEFAULT_FONT_PATH)
 
 
 def assemble(
@@ -110,14 +116,20 @@ def assemble(
         ])
         concat_out = fade_out_path
 
-    # Step 3: 字幕烧录（如有 SRT 且 ffmpeg 支持 drawtext）
-    if srt_path and Path(srt_path).exists() and _has_drawtext_support():
-        logger.info("Step 3: 烧录字幕")
+    # Step 3: 字幕烧录（用实际视频时长重算字幕时间）
+    if srt_path and _has_drawtext_support():
+        logger.info("Step 3: 用实际时长重算字幕时间 + 烧录")
+        # 用 processed_durations（实际 ffmpeg 输出时长）替代理论 display_duration
+        actual_srt_path = str(workdir / "subtitles_actual.srt")
+        generate_srt_from_actual_durations(
+            timeline, actual_durations=processed_durations,
+            output_path=actual_srt_path,
+        )
         subtitled_out = str(workdir / "subtitled.mp4")
-        _burn_subtitles(concat_out, srt_path, subtitled_out)
+        _burn_subtitles(concat_out, actual_srt_path, subtitled_out)
         current_output = subtitled_out
     else:
-        if srt_path and Path(srt_path).exists():
+        if srt_path:
             logger.info("Step 3: 跳过字幕烧录（ffmpeg 缺少 drawtext 滤镜，字幕仅输出 SRT 文件）")
         else:
             logger.info("Step 3: 跳过字幕烧录（无 SRT 文件）")
@@ -210,9 +222,7 @@ def _burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
                 )
         start = entry["start"]
         end = entry["end"]
-        # macOS 系统字体路径（支持中英文混排）
-        fontfile = "/Library/Fonts/Arial Unicode.ttf"
-        fontfile_escaped = fontfile.replace(":", "\\:").replace(" ", "\\ ")
+        fontfile_escaped = SUBTITLE_FONT.replace(":", "\\:").replace(" ", "\\ ")
 
         filters.append(
             f"drawtext=text='{text}'"

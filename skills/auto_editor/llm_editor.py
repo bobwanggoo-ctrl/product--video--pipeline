@@ -11,7 +11,7 @@ from typing import Optional
 
 from models.storyboard import Storyboard
 from models.timeline import (
-    BgmInfo, EditingTimeline, LLMEditingDecision, TimelineClip,
+    BgmInfo, EditingTimeline, TimelineClip,
 )
 from models.video_clip import ClipAnalysis
 from utils.json_repair import extract_json
@@ -227,6 +227,17 @@ def _build_timeline(
         logger.warning(f"总时长 {total:.1f}s 低于目标 {TARGET_DURATION_MIN}s")
     elif total > TARGET_DURATION_MAX:
         logger.warning(f"总时长 {total:.1f}s 超过目标 {TARGET_DURATION_MAX}s")
+
+    # 转场比例校验：cut 应占 70%+（警告不阻断）
+    if len(timeline_clips) > 1:
+        total_transitions = len(timeline_clips) - 1
+        cut_count = sum(1 for c in timeline_clips[:-1] if c.transition_out == "cut")
+        cut_ratio = cut_count / total_transitions
+        if cut_ratio < 0.7:
+            logger.warning(
+                f"Cut 转场比例 {cut_ratio:.0%} ({cut_count}/{total_transitions}) "
+                f"低于 70% 底线，节奏可能过拖"
+            )
 
     # 解析 BGM
     bgm_choice = data.get("bgm_choice", "")
