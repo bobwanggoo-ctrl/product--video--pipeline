@@ -66,8 +66,20 @@ def concat_with_xfade(
     transition: str = "fade",
     transition_duration: float = 0.4,
     clip_durations: list[float] | None = None,
+    transitions: list[dict] | None = None,
 ) -> str:
-    """Concatenate multiple video clips with xfade transitions."""
+    """Concatenate multiple video clips with xfade transitions.
+
+    Args:
+        input_paths: 视频文件路径列表。
+        output_path: 输出路径。
+        transition: 全局默认转场类型（当 transitions 未指定时使用）。
+        transition_duration: 全局默认转场时长。
+        clip_durations: 每个片段的时长列表（可选，自动检测）。
+        transitions: per-clip 转场参数列表（可选），长度 = len(input_paths) - 1。
+            每项为 {"type": "fade"|"dissolve"|"cut", "duration": 0.4}。
+            type 为 "cut" 时该位置不使用 xfade（硬切）。
+    """
     if len(input_paths) < 2:
         if input_paths:
             run_ffmpeg(["-i", str(input_paths[0]), "-c", "copy", str(output_path)])
@@ -76,25 +88,57 @@ def concat_with_xfade(
     if clip_durations is None:
         clip_durations = [get_video_info(p)["duration"] for p in input_paths]
 
+    # 构建 per-clip 转场参数
+    n_transitions = len(input_paths) - 1
+    if transitions is None:
+        transitions = [{"type": transition, "duration": transition_duration}] * n_transitions
+    elif len(transitions) < n_transitions:
+        # 不足的部分用默认值补齐
+        transitions = list(transitions) + [
+            {"type": transition, "duration": transition_duration}
+        ] * (n_transitions - len(transitions))
+
+    # 分离 cut 和 xfade 段：连续的 cut 用 concat 协议，xfade 段用 xfade 滤镜
+    # 简化策略：所有 cut 转场用 offset = clip_duration（无重叠），xfade 正常处理
     inputs = []
     for p in input_paths:
         inputs.extend(["-i", str(p)])
 
-    # Build xfade filter chain
+    # 构建 xfade filter chain（per-clip 转场）
+    # offset 表示当前 xfade 在输出时间线上的位置
     filter_parts = []
-    offset = clip_durations[0] - transition_duration
     prev_label = "[0:v]"
+    offset = clip_durations[0]  # 第一个片段结束的时间点
 
     for i in range(1, len(input_paths)):
+        t = transitions[i - 1]
+        t_type = t.get("type", "cut")
+        t_dur = float(t.get("duration", 0.4)) if t_type != "cut" else 0.001
+
+        # xfade offset = 上一段结束时间 - 转场重叠时长
+        xfade_offset = offset - t_dur
+
         out_label = f"[v{i-1}{i}]" if i < len(input_paths) - 1 else "[vout]"
         cur_label = f"[{i}:v]"
+
+        # 映射转场类型到 ffmpeg xfade 支持的名称
+        xfade_name = t_type if t_type in (
+            "fade", "dissolve", "wipeleft", "wiperight", "wipeup", "wipedown",
+            "slideleft", "slideright", "slideup", "slidedown",
+            "circlecrop", "rectcrop", "distance", "fadeblack", "fadewhite",
+            "radial", "smoothleft", "smoothright", "smoothup", "smoothdown",
+        ) else "fade"
+
         filter_parts.append(
-            f"{prev_label}{cur_label}xfade=transition={transition}"
-            f":duration={transition_duration:.3f}:offset={offset:.3f}{out_label}"
+            f"{prev_label}{cur_label}xfade=transition={xfade_name}"
+            f":duration={t_dur:.3f}:offset={xfade_offset:.3f}{out_label}"
         )
+
         prev_label = out_label
-        if i < len(input_paths) - 1:
-            offset += clip_durations[i] - transition_duration
+        # 累加当前片段时长（减去转场重叠）
+        offset = xfade_offset + t_dur + clip_durations[i] - t_dur
+        # 简化: offset += clip_durations[i] - t_dur  但需要从 xfade_offset 基准算
+        offset = xfade_offset + clip_durations[i]
 
     run_ffmpeg(inputs + [
         "-filter_complex", ";".join(filter_parts),

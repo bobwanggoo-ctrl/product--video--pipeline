@@ -61,14 +61,14 @@
 
 | Phase | 内容 | 状态 |
 |-------|------|------|
-| 1 | 数据模型补充（ClipAnalysis/TimelineClip 加字段） | ⬚ 待开发 |
-| 2 | editing_rules.md + subtitle_rules.md | ⬚ 待开发 |
-| 3 | video_analyzer.py + bgm_scanner.py | ⬚ 待开发 |
-| 4 | llm_editor.py（剪辑决策 + 时长校验） | ⬚ 待开发 |
-| 5 | subtitle_gen.py（SRT 生成） | ⬚ 待开发 |
-| 6 | ffmpeg_assembler.py（变速 + per-clip 转场 + 字幕烧录 + BGM） | ⬚ 待开发 |
-| 7 | edl_exporter.py（剪映 JSON + FCPXML） | ⬚ 待开发 |
-| 8 | 合并测试 | ⬚ 待开发 |
+| 1 | 数据模型补充（ClipAnalysis/TimelineClip 加字段） | ✅ 完成 |
+| 2 | editing_rules.md + subtitle_rules.md | ✅ 完成 |
+| 3 | video_analyzer.py + bgm_scanner.py | ✅ 完成 |
+| 4 | llm_editor.py（剪辑决策 + 时长校验） | ✅ 完成 |
+| 5 | subtitle_gen.py（SRT 生成） | ✅ 完成 |
+| 6 | ffmpeg_assembler.py（变速 + per-clip 转场 + 字幕烧录 + BGM） | ✅ 完成 |
+| 7 | edl_exporter.py（剪映 JSON + FCPXML） | ✅ 完成 |
+| 8 | 合并测试（端到端） | ⬚ 待测试 |
 
 **关键决策：**
 - 视频分析：FFmpeg + Storyboard（不用 VideoDB，降级方案：加 LLM 故事脚本 → VideoDB）
