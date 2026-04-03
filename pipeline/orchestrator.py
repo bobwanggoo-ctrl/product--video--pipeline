@@ -268,21 +268,58 @@ class PipelineOrchestrator:
     def _generate_videos(
         self, shot_ids: list[int], frame_paths: dict, input_data: dict,
     ) -> list[dict]:
-        """调用 Skill 4 生成视频（待接 Kling API）。
+        """调用 Kling API 批量生成视频。
+
+        先批量提交所有任务，再逐个轮询等待 + 下载。
 
         Returns: [{"shot_id": int, "success": bool, "video_path": str}]
         """
-        # TODO: 接入 Kling API
-        # from skills.frame_to_video.generator import generate_video
-        results = []
+        from utils.kling_client import KlingClient
+
+        client = KlingClient()
+        motion_map = input_data.get("motion_map", {})  # {shot_id: motion_prompt}
+        output_dir = Path(input_data.get("video_output_dir", str(settings.VIDEOS_DIR)))
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. 批量提交
+        task_map: dict[str, int] = {}  # {task_id: shot_id}
+        submit_failed: list[dict] = []
+
         for sid in shot_ids:
             frame_path = frame_paths.get(sid, "")
             if not frame_path:
-                results.append({"shot_id": sid, "success": False, "video_path": ""})
+                submit_failed.append({"shot_id": sid, "success": False, "video_path": ""})
                 continue
-            # 占位：实际调用 Kling API
-            logger.warning(f"Shot {sid}: Kling API 未接入，跳过")
-            results.append({"shot_id": sid, "success": False, "video_path": ""})
+            try:
+                motion_prompt = motion_map.get(sid, "")
+                result = client.image_to_video(frame_path, prompt=motion_prompt)
+                task_map[result["task_id"]] = sid
+                logger.info(f"  shot_{sid:02d} → Kling task {result['task_id']}")
+            except Exception as e:
+                logger.warning(f"  shot_{sid:02d} Kling 提交失败: {e}")
+                submit_failed.append({"shot_id": sid, "success": False, "video_path": ""})
+
+        logger.info(f"[Pipeline] Kling 提交: {len(task_map)} 成功, {len(submit_failed)} 失败")
+
+        # 2. 逐个轮询 + 下载
+        results = list(submit_failed)
+        for task_id, sid in task_map.items():
+            try:
+                task_result = client.wait_for_task(task_id, timeout=600.0)
+                video_url = task_result.get("video_url")
+                if not video_url:
+                    logger.warning(f"  shot_{sid:02d} 无视频 URL")
+                    results.append({"shot_id": sid, "success": False, "video_path": ""})
+                    continue
+
+                video_path = str(output_dir / f"shot_{sid:02d}.mp4")
+                client.download_video(video_url, video_path)
+                results.append({"shot_id": sid, "success": True, "video_path": video_path})
+                logger.info(f"  shot_{sid:02d} ✓ → {video_path}")
+            except Exception as e:
+                logger.warning(f"  shot_{sid:02d} Kling 失败: {e}")
+                results.append({"shot_id": sid, "success": False, "video_path": ""})
+
         return results
 
     # ── Skill 5 ──────────────────────────────────────

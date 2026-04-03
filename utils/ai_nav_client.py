@@ -101,9 +101,9 @@ class AiNavClient:
         if data.get("status") != "200":
             raise RuntimeError(f"上传失败: {data}")
 
-        key = data.get("data", {}).get("key", "")
+        key = data.get("data", {}).get("key") or data.get("data", {}).get("url", "")
         if not key:
-            raise RuntimeError(f"上传返回无 key: {data}")
+            raise RuntimeError(f"上传返回无 key/url: {data}")
 
         logger.info(f"[AiNav] 上传成功: {key}")
         return key
@@ -156,7 +156,19 @@ class AiNavClient:
         if data.get("status") != "200":
             raise RuntimeError(f"创建任务失败: {data}")
 
-        task_id = str(data.get("data", {}).get("id", ""))
+        raw_data = data.get("data", {})
+        # data 可能是 dict、list[dict]、或 list[str]
+        if isinstance(raw_data, list):
+            if raw_data and isinstance(raw_data[0], dict):
+                task_id = str(raw_data[0].get("id", ""))
+            elif raw_data:
+                task_id = str(raw_data[0])
+            else:
+                task_id = ""
+        elif isinstance(raw_data, dict):
+            task_id = str(raw_data.get("id", ""))
+        else:
+            task_id = str(raw_data) if raw_data else ""
         if not task_id:
             raise RuntimeError(f"创建任务返回无 ID: {data}")
 
