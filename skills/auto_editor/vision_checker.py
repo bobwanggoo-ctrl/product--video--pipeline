@@ -176,66 +176,9 @@ def _call_vision(
     *,
     preferred_llm: str | None = None,
 ) -> str:
-    """调用 Vision LLM（支持 Gemini 官方 SDK 和 Reverse Prompt 中转站）。"""
-    choice = (preferred_llm or "").strip().lower()
-
-    # Reverse Prompt / tu-zi 中转站：走 OpenAI 兼容 multimodal 格式
-    if choice in ("reverse", "reverse_prompt", "tuzi") and settings.REVERSE_PROMPT_API_KEY:
-        return _call_vision_reverse_prompt(prompt, images_b64)
-
-    # 有 Reverse Prompt key 但没指定 llm → 也走 reverse prompt
-    if settings.REVERSE_PROMPT_API_KEY and not settings.GEMINI_VISION_API_KEY and not settings.GEMINI_API_KEY:
-        return _call_vision_reverse_prompt(prompt, images_b64)
-
-    # Gemini 官方 SDK
+    """调用 Vision LLM：统一走 llm_client.call_vision（AI导航优先）。"""
     from utils.llm_client import llm_client
-    return llm_client.call_vision(prompt, images_b64)
-
-
-def _call_vision_reverse_prompt(prompt: str, images_b64: list[str]) -> str:
-    """通过 Reverse Prompt 中转站调用 Vision（OpenAI multimodal chat 格式）。"""
-    import requests
-    import time
-
-    base_url = settings.REVERSE_PROMPT_BASE_URL.rstrip("/")
-    path = settings.REVERSE_PROMPT_PATH
-    model = settings.REVERSE_PROMPT_MODEL
-    url = f"{base_url}{path}"
-
-    # 构建 multimodal content：文本 + 图片
-    content_parts = [{"type": "text", "text": prompt}]
-    for img_b64 in images_b64:
-        content_parts.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"},
-        })
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {settings.REVERSE_PROMPT_API_KEY}",
-    }
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": content_parts}],
-        "temperature": 0.2,
-        "max_tokens": 2048,
-        "response_format": {"type": "json_object"},
-    }
-
-    started_at = time.perf_counter()
-    logger.info(f"[Vision][START][ReversePrompt] model={model} images={len(images_b64)}")
-
-    resp = requests.post(url, headers=headers, json=payload, timeout=(10, 180))
-    resp.raise_for_status()
-
-    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-    logger.info(f"[Vision][END][ReversePrompt] model={model} elapsed_ms={elapsed_ms}")
-
-    data = resp.json()
-    choices = data.get("choices", [])
-    if not choices:
-        raise ValueError(f"No choices in vision response: {data}")
-    return (choices[0].get("message") or {}).get("content", "").strip()
+    return llm_client.call_vision(prompt, images_b64, preferred_llm=preferred_llm)
 
 
 def _default_result() -> dict:

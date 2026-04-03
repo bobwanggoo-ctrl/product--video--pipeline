@@ -33,11 +33,26 @@ class AiNavClient:
         token: str = "",
         app_id: str = "",
         group_id: str = "",
+        purpose: str = "image",
     ):
+        """初始化客户端。
+
+        Args:
+            purpose: "image" (生图/生视频, GROUP_ID=1) 或 "llm" (Gemini LLM, GROUP_ID=13)。
+                     手动传 app_id/group_id 时忽略此参数。
+        """
         self.base_url = (base_url or settings.AI_NAV_BASE_URL).rstrip("/")
         self.token = token or settings.AI_NAV_TOKEN
-        self.app_id = app_id or settings.AI_NAV_APP_ID
-        self.group_id = group_id or settings.AI_NAV_GROUP_ID
+
+        if app_id and group_id:
+            self.app_id = app_id
+            self.group_id = group_id
+        elif purpose == "llm":
+            self.app_id = settings.AI_NAV_LLM_APP_ID
+            self.group_id = settings.AI_NAV_LLM_GROUP_ID
+        else:
+            self.app_id = settings.AI_NAV_IMAGE_APP_ID
+            self.group_id = settings.AI_NAV_IMAGE_GROUP_ID
 
         if not self.token:
             raise ValueError("AI_NAV_TOKEN 未配置，请在 .env 中设置")
@@ -174,18 +189,31 @@ class AiNavClient:
         task_data = data.get("data", {})
         status = task_data.get("status", 0)
 
-        # 提取结果 URL
+        # 提取结果
         result_urls = []
+        result_text = ""
         response_json = task_data.get("responseJson") or {}
         for item in response_json.get("data", []):
-            if isinstance(item, dict) and item.get("url"):
-                result_urls.append(item["url"])
+            if isinstance(item, dict):
+                if item.get("url"):
+                    result_urls.append(item["url"])
+                if item.get("text"):
+                    result_text += item["text"]
+            elif isinstance(item, str):
+                result_text += item
+
+        # 兜底：responseJson 本身可能是文本
+        if not result_urls and not result_text:
+            raw = response_json.get("text") or response_json.get("content") or ""
+            if isinstance(raw, str):
+                result_text = raw
 
         return {
             "id": str(task_data.get("id", "")),
             "status": status,
             "status_name": TASK_STATUS.get(status, f"UNKNOWN({status})"),
             "result_urls": result_urls,
+            "result_text": result_text,
             "fail_reason": task_data.get("failReason") or "",
             "duration_ms": int(task_data.get("durationMs") or 0),
             "queue_position": task_data.get("queuePosition"),
