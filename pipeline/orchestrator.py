@@ -148,6 +148,9 @@ class PipelineOrchestrator:
         if step == PipelineStep.SELLPOINT_TO_STORYBOARD:
             return self._run_sellpoint_to_storyboard(input_data)
 
+        if step == PipelineStep.STORYBOARD_TO_FRAME:
+            return self._run_storyboard_to_frame(input_data)
+
         if step == PipelineStep.FRAME_SELECTION:
             return self._run_frame_selection(input_data)
 
@@ -157,7 +160,7 @@ class PipelineOrchestrator:
         if step == PipelineStep.AUTO_EDIT:
             return self._run_auto_edit(input_data)
 
-        # Skill 2 / Skill 3 待接入
+        # Skill 3 待接入
         raise NotImplementedError(f"Step {step.value} not yet implemented.")
 
     # ── Skill 1 ──────────────────────────────────────
@@ -173,6 +176,27 @@ class PipelineOrchestrator:
             output_path=input_data.get("output_path"),
         )
         return {"storyboard": storyboard}
+
+    # ── Skill 2 ──────────────────────────────────────
+
+    def _run_storyboard_to_frame(self, input_data: dict) -> dict:
+        """Skill 2: 分镜 → 画面帧。
+
+        input_data:
+            storyboard: Storyboard
+            reference_image_dir: str  (产品参考图目录)
+            output_dir: str           (帧图保存目录)
+            aspect_ratio: str         (可选, 默认 16:9)
+        """
+        from skills.storyboard_to_frame.generator import generate_frames
+
+        result = generate_frames(
+            storyboard=input_data["storyboard"],
+            reference_image_dir=input_data.get("reference_image_dir", str(settings.REFERENCE_IMAGES_DIR)),
+            output_dir=input_data.get("output_dir", str(settings.FRAMES_DIR)),
+            aspect_ratio=input_data.get("aspect_ratio", "16:9"),
+        )
+        return result
 
     # ── 选材 ─────────────────────────────────────────
 
