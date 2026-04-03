@@ -45,6 +45,12 @@ REVERSE_PROMPT_BASE_URL = os.getenv("REVERSE_PROMPT_BASE_URL", "https://api.tu-z
 REVERSE_PROMPT_PATH = os.getenv("REVERSE_PROMPT_PATH", "/chat/completions")
 REVERSE_PROMPT_MODEL = os.getenv("REVERSE_PROMPT_MODEL", "gemini-3-flash-preview")
 
+# --- AI导航 (yswg) ---
+AI_NAV_BASE_URL = os.getenv("AI_NAV_BASE_URL", "http://yswg.love:15091/api/admin")
+AI_NAV_TOKEN = os.getenv("AI_NAV_TOKEN", "")
+AI_NAV_APP_ID = os.getenv("AI_NAV_APP_ID", "2038805674553368579")
+AI_NAV_GROUP_ID = os.getenv("AI_NAV_GROUP_ID", "1")
+
 # --- Image Generation ---
 GEMINI_IMAGE_API_KEY = os.getenv("GEMINI_IMAGE_API_KEY", "")
 GEMINI_IMAGE_BASE_URL = os.getenv("GEMINI_IMAGE_BASE_URL", "")
