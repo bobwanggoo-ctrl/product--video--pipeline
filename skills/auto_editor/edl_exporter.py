@@ -269,6 +269,15 @@ def export_fcpxml(
         "uid": ".../Titles.localized/Essential Titles.localized/Essential Title.localized/Essential Title.moti",
     })
 
+    # 转场 effect（FCP 内置 Cross Dissolve）
+    dissolve_ref = f"r{asset_id_counter}"
+    asset_id_counter += 1
+    ET.SubElement(resources, "effect", {
+        "id": dissolve_ref,
+        "name": "Cross Dissolve",
+        "uid": ".../Transitions.localized/Dissolve.localized/Cross Dissolve.localized/Cross Dissolve.motr",
+    })
+
     # ── library → event → project → sequence ──
     library = ET.SubElement(fcpxml, "library")
     event = ET.SubElement(library, "event", name="Auto Edit")
@@ -283,6 +292,7 @@ def export_fcpxml(
     spine = ET.SubElement(sequence, "spine")
 
     # ── spine: clips + transitions + titles + BGM ──
+    # offset 按顺序累加，不手动减 transition 时长（FCP 自动处理重叠）
     current_offset = 0.0
     ts_counter = 0
 
@@ -291,7 +301,7 @@ def export_fcpxml(
         return round(seconds * fps) / fps
 
     for i, clip in enumerate(timeline.clips):
-        # Transition between clips
+        # Transition between clips（放在 clip 前面）
         need_transition = False
         if i > 0:
             prev_out = timeline.clips[i - 1].transition_out
@@ -302,10 +312,9 @@ def export_fcpxml(
         if need_transition:
             trans_dur = _snap(clip.transition_duration)
             ET.SubElement(spine, "transition", {
-                "name": _get_fcp_transition_name(clip.transition_in or timeline.clips[i - 1].transition_out),
+                "ref": dissolve_ref,
                 "duration": _rs(trans_dur),
             })
-            current_offset = _snap(current_offset - trans_dur)
 
         # asset-clip
         clip_elem = ET.SubElement(spine, "asset-clip", {
@@ -327,12 +336,12 @@ def export_fcpxml(
                 "audioRole": "dialogue",
             })
 
-        # Title attached to clip
+        # Title attached to clip — 按 subtitle_style 区分样式
         if clip.subtitle_text:
             ts_counter += 1
-            ts_id1 = f"ts{ts_counter}"
-            ts_counter += 1
-            ts_id2 = f"ts{ts_counter}"
+            ts_id = f"ts{ts_counter}"
+            is_title = clip.subtitle_style == "title"
+            font_size = "80" if is_title else "48"
 
             title_elem = ET.SubElement(clip_elem, "title", {
                 "ref": title_ref,
@@ -342,41 +351,34 @@ def export_fcpxml(
                 "start": "3600s",
                 "duration": _rs(clip.display_duration),
             })
+            # Position: title 居中偏下，selling_point 底部
+            y_pos = "-200" if is_title else "-430"
+            ET.SubElement(title_elem, "param", {
+                "name": "Position",
+                "key": "9999/999166631/999166633/2/354/999169573/401",
+                "value": f"0 {y_pos}",
+            })
             text_elem = ET.SubElement(title_elem, "text")
-            # FCP splits text into two text-style runs (kerning on first chars)
-            if len(clip.subtitle_text) > 1:
-                ts1 = ET.SubElement(text_elem, "text-style", ref=ts_id1)
-                ts1.text = clip.subtitle_text[:-1]
-                ts2 = ET.SubElement(text_elem, "text-style", ref=ts_id2)
-                ts2.text = clip.subtitle_text[-1]
-            else:
-                ts1 = ET.SubElement(text_elem, "text-style", ref=ts_id1)
-                ts1.text = clip.subtitle_text
-
-            tsd1 = ET.SubElement(title_elem, "text-style-def", id=ts_id1)
-            ET.SubElement(tsd1, "text-style", {
+            ts_node = ET.SubElement(text_elem, "text-style", ref=ts_id)
+            ts_node.text = clip.subtitle_text
+            tsd = ET.SubElement(title_elem, "text-style-def", id=ts_id)
+            style_attrs = {
                 "font": "Helvetica",
-                "fontSize": "63",
+                "fontSize": font_size,
                 "fontColor": "1 1 1 1",
                 "bold": "1",
-                "kerning": "4",
                 "alignment": "center",
-            })
-            if len(clip.subtitle_text) > 1:
-                tsd2 = ET.SubElement(title_elem, "text-style-def", id=ts_id2)
-                ET.SubElement(tsd2, "text-style", {
-                    "font": "Helvetica",
-                    "fontSize": "63",
-                    "fontColor": "1 1 1 1",
-                    "bold": "1",
-                    "alignment": "center",
-                })
+            }
+            if is_title:
+                style_attrs["strokeColor"] = "0 0 0 1"
+                style_attrs["strokeWidth"] = "2"
+            else:
+                style_attrs["shadowColor"] = "0 0 0 0.75"
+                style_attrs["shadowOffset"] = "3 315"
+            ET.SubElement(tsd, "text-style", style_attrs)
 
-        # Advance offset (snap to frame boundary)
-        overlap = 0.0
-        if clip.transition_out != "cut" and i < len(timeline.clips) - 1:
-            overlap = _snap(clip.transition_duration)
-        current_offset = _snap(current_offset + clip.display_duration - overlap)
+        # Advance offset（顺序累加，不减 transition）
+        current_offset = _snap(current_offset + clip.display_duration)
 
     # Write
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
