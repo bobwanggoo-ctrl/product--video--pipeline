@@ -190,68 +190,84 @@ def export_fcpxml(
     output_path: str,
     srt_path: str = "",
 ) -> str:
-    """导出 Final Cut Pro 兼容的 FCPXML 1.9 文件。
+    """导出 Final Cut Pro 兼容的 FCPXML 1.11 文件。
 
-    包含：视频轨（spine）、字幕（title attached clips）、BGM（connected audio）。
+    格式对照 FCP 自身导出的 .fcpxmld，包含视频轨、字幕 title、BGM。
     """
-    # FCPXML 根元素（v1.9 兼容 FCP 10.4+）
-    fcpxml = ET.Element("fcpxml", version="1.9")
+    fcpxml = ET.Element("fcpxml", version="1.11")
 
-    # 从 timeline 读取 fps 和分辨率
     fps = int(timeline.fps) if timeline.fps == int(timeline.fps) else timeline.fps
     res_parts = timeline.resolution.split("x")
     width = res_parts[0] if len(res_parts) == 2 else "1920"
     height = res_parts[1] if len(res_parts) == 2 else "1080"
 
-    def _rs(seconds: float) -> str:
-        """将秒数转为 FCPXML rational time（基于帧数）。"""
-        frames = round(seconds * fps)
-        return f"{frames}/{fps}s"
+    # FCP 用 100/2400s 表示 24fps（= 1/24），与 FCP 导出一致
+    frame_dur = f"100/{fps * 100}s"
 
-    # resources: 格式 + 素材
+    def _rs(seconds: float) -> str:
+        """秒 → FCPXML rational time。用 100 倍 fps 为分母避免舍入。"""
+        base = fps * 100
+        ticks = round(seconds * base)
+        return f"{ticks}/{base}s"
+
+    # ── resources ──
     resources = ET.SubElement(fcpxml, "resources")
     ET.SubElement(resources, "format", {
         "id": "r1",
         "name": f"FFVideoFormat{height}p{fps}",
-        "frameDuration": f"1/{fps}s",
+        "frameDuration": frame_dur,
         "width": width, "height": height,
     })
 
-    # 视频素材 assets
+    # 视频素材
+    asset_id_counter = 2  # r1 是 format，从 r2 开始
+    clip_ref_map = {}  # shot_id → asset ref id
     for clip in timeline.clips:
+        ref_id = f"r{asset_id_counter}"
+        clip_ref_map[clip.shot_id] = ref_id
+        asset_id_counter += 1
         asset_elem = ET.SubElement(resources, "asset", {
-            "id": f"clip_{clip.shot_id}",
+            "id": ref_id,
             "name": f"Shot {clip.shot_id}",
-            "hasVideo": "1", "hasAudio": "0",
-            "format": "r1",
+            "start": "0s",
             "duration": _rs(clip.trim_end),
+            "hasVideo": "1",
+            "format": "r1",
         })
         ET.SubElement(asset_elem, "media-rep", {
             "kind": "original-media",
             "src": Path(clip.source_path).resolve().as_uri(),
         })
 
-    # BGM 素材 asset
+    # BGM 素材
+    bgm_ref = None
     if timeline.bgm_path:
+        bgm_ref = f"r{asset_id_counter}"
+        asset_id_counter += 1
         bgm_asset = ET.SubElement(resources, "asset", {
-            "id": "bgm",
+            "id": bgm_ref,
             "name": "BGM",
-            "hasVideo": "0", "hasAudio": "1",
-            "format": "r1",
+            "start": "0s",
+            "hasAudio": "1",
+            "audioSources": "1",
+            "audioChannels": "2",
+            "audioRate": "44100",
         })
         ET.SubElement(bgm_asset, "media-rep", {
             "kind": "original-media",
             "src": Path(timeline.bgm_path).resolve().as_uri(),
         })
 
-    # 字幕 effect 资源（FCP 内置 Basic Title）
+    # 字幕 effect（FCP 内置 Essential Title）
+    title_ref = f"r{asset_id_counter}"
+    asset_id_counter += 1
     ET.SubElement(resources, "effect", {
-        "id": "title_effect",
-        "name": "Basic Title",
-        "uid": "/Applications/Final Cut Pro.app/Contents/PlugIns/MediaProviders/MotionEffect.fxp/Contents/Resources/PETemplates.localized/Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti",
+        "id": title_ref,
+        "name": "Essential Title",
+        "uid": ".../Titles.localized/Essential Titles.localized/Essential Title.localized/Essential Title.moti",
     })
 
-    # library → event → project → sequence
+    # ── library → event → project → sequence ──
     library = ET.SubElement(fcpxml, "library")
     event = ET.SubElement(library, "event", name="Auto Edit")
     project_elem = ET.SubElement(event, "project", name="Product Video")
@@ -264,12 +280,12 @@ def export_fcpxml(
 
     spine = ET.SubElement(sequence, "spine")
 
-    # 构建 spine：视频 clip + transition + attached 字幕 + attached BGM
+    # ── spine: clips + transitions + titles + BGM ──
     current_offset = 0.0
-    title_idx = 0
+    ts_counter = 0
 
     for i, clip in enumerate(timeline.clips):
-        # 在两个 clip 之间插入 transition
+        # Transition between clips
         need_transition = False
         if i > 0:
             prev_out = timeline.clips[i - 1].transition_out
@@ -279,76 +295,94 @@ def export_fcpxml(
 
         if need_transition:
             trans_dur = clip.transition_duration
-            trans_elem = ET.SubElement(spine, "transition", {
+            ET.SubElement(spine, "transition", {
                 "name": _get_fcp_transition_name(clip.transition_in or timeline.clips[i - 1].transition_out),
                 "duration": _rs(trans_dur),
             })
-            # transition 会吃掉前后各一半时长，offset 向前回退
             current_offset -= trans_dur
 
-        # asset-clip（start = trim 起点，duration = 展示时长）
+        # asset-clip
         clip_elem = ET.SubElement(spine, "asset-clip", {
-            "ref": f"clip_{clip.shot_id}",
-            "name": f"Shot {clip.shot_id}",
+            "ref": clip_ref_map[clip.shot_id],
             "offset": _rs(current_offset),
+            "name": f"Shot {clip.shot_id}",
             "duration": _rs(clip.display_duration),
-            "start": _rs(clip.trim_start),
             "tcFormat": "NDF",
         })
 
-        # 字幕作为 attached title（lane=1 表示字幕轨在视频上方）
+        # BGM attached to first clip
+        if i == 0 and bgm_ref:
+            ET.SubElement(clip_elem, "asset-clip", {
+                "ref": bgm_ref,
+                "lane": "-1",
+                "offset": "0s",
+                "name": "BGM",
+                "duration": _rs(timeline.total_duration),
+                "audioRole": "dialogue",
+            })
+
+        # Title attached to clip
         if clip.subtitle_text:
-            title_idx += 1
-            ts_id = f"ts{title_idx}"
+            ts_counter += 1
+            ts_id1 = f"ts{ts_counter}"
+            ts_counter += 1
+            ts_id2 = f"ts{ts_counter}"
+
             title_elem = ET.SubElement(clip_elem, "title", {
-                "ref": "title_effect",
-                "name": clip.subtitle_text,
+                "ref": title_ref,
                 "lane": "1",
-                "offset": _rs(clip.trim_start),
+                "offset": "0s",
+                "name": "Essential Title",
+                "start": "3600s",
                 "duration": _rs(clip.display_duration),
             })
-            param_text = ET.SubElement(title_elem, "param", {
-                "name": "Position",
-                "key": "9999/999166631/999166633/2/354/999169573/401",
-                "value": "0 -450",
-            })
             text_elem = ET.SubElement(title_elem, "text")
-            ts = ET.SubElement(text_elem, "text-style", ref=ts_id)
-            ts.text = clip.subtitle_text
-            ET.SubElement(title_elem, "text-style-def", id=ts_id).append(
-                _make_element("text-style", {
-                    "font": "Helvetica Neue",
-                    "fontSize": "42",
+            # FCP splits text into two text-style runs (kerning on first chars)
+            if len(clip.subtitle_text) > 1:
+                ts1 = ET.SubElement(text_elem, "text-style", ref=ts_id1)
+                ts1.text = clip.subtitle_text[:-1]
+                ts2 = ET.SubElement(text_elem, "text-style", ref=ts_id2)
+                ts2.text = clip.subtitle_text[-1]
+            else:
+                ts1 = ET.SubElement(text_elem, "text-style", ref=ts_id1)
+                ts1.text = clip.subtitle_text
+
+            tsd1 = ET.SubElement(title_elem, "text-style-def", id=ts_id1)
+            ET.SubElement(tsd1, "text-style", {
+                "font": "Helvetica",
+                "fontSize": "63",
+                "fontColor": "1 1 1 1",
+                "bold": "1",
+                "kerning": "4",
+                "alignment": "center",
+            })
+            if len(clip.subtitle_text) > 1:
+                tsd2 = ET.SubElement(title_elem, "text-style-def", id=ts_id2)
+                ET.SubElement(tsd2, "text-style", {
+                    "font": "Helvetica",
+                    "fontSize": "63",
                     "fontColor": "1 1 1 1",
                     "bold": "1",
-                    "shadowColor": "0 0 0 0.75",
-                    "shadowOffset": "3 315",
                     "alignment": "center",
                 })
-            )
 
-        # BGM attached 到第一个 clip
-        if i == 0 and timeline.bgm_path:
-            ET.SubElement(clip_elem, "asset-clip", {
-                "ref": "bgm",
-                "name": "BGM",
-                "lane": "-1",
-                "offset": _rs(clip.trim_start),
-                "duration": _rs(timeline.total_duration),
-                "start": "0s",
-            })
-
-        # 推进 offset
+        # Advance offset
         overlap = 0.0
         if clip.transition_out != "cut" and i < len(timeline.clips) - 1:
             overlap = clip.transition_duration
         current_offset += clip.display_duration - overlap
 
-    # 写入文件
+    # Write
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     tree = ET.ElementTree(fcpxml)
-    ET.indent(tree, space="  ")
-    tree.write(output_path, encoding="unicode", xml_declaration=True)
+    ET.indent(tree, space="    ")
+
+    # Write with DOCTYPE
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+        f.write('<!DOCTYPE fcpxml>\n\n')
+        ET.indent(tree, space="    ")
+        tree.write(f, encoding="unicode", xml_declaration=False)
 
     logger.info(f"FCPXML 导出完成: {output_path}")
     return output_path
