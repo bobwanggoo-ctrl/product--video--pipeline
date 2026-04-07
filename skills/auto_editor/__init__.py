@@ -103,9 +103,9 @@ def run(
     )
 
     # NLE 项目导出
-    jianying_path = str(out_dir / "draft_content.json")  # 传入路径，函数内部会创建 .draft 目录
+    jianying_path = str(out_dir / "draft_content.json")
     fcpxml_path = str(out_dir / "project.fcpxml")
-    jianying_draft_dir = export_jianying_json(timeline, jianying_path, srt_paths["en"])
+    export_jianying_json(timeline, jianying_path, srt_paths["en"])
     export_fcpxml(timeline, fcpxml_path, srt_paths["en"])
 
     logger.info("=" * 60)
@@ -116,7 +116,7 @@ def run(
         "mp4": mp4_path,
         "srt_en": srt_paths["en"],
         "srt_cn": srt_paths["cn"],
-        "jianying_json": jianying_draft_dir,
+        "jianying_json": jianying_path,
         "fcpxml": fcpxml_path,
         "timeline": timeline,
     }

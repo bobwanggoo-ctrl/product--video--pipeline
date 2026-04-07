@@ -25,33 +25,21 @@ def export_jianying_json(
     output_path: str,
     srt_path: str = "",
 ) -> str:
-    """导出剪映专业版兼容的 .draft 文件夹。
+    """导出剪映参考 JSON（含完整时间线信息）。
 
-    .draft 文件夹结构：
-      ProductVideo.draft/
-        draft_content.json   — 时间轴、素材、轨道
-        draft_meta_info.json — 项目元数据（分辨率、时长、版本）
+    注意：剪映专业版的 .draft 文件是加密的，无法直接生成可导入的项目文件。
+    此 JSON 作为参考文件，包含完整的素材、轨道、时间码信息，
+    用户可参照在剪映中手动重建项目。
 
-    Args:
-        output_path: 输出路径（传入的路径会被转为 .draft 目录）。
-
-    Returns:
-        .draft 文件夹路径。
+    格式结构：
+    - materials: {videos, audios, texts}  素材引用池
+    - tracks: [{type, segments}]          时间线轨道
+    时间单位：微秒。
     """
     import uuid
 
     def _uid() -> str:
         return uuid.uuid4().hex[:24].upper()
-
-    # 确定 .draft 目录路径
-    out = Path(output_path)
-    if out.suffix == ".json":
-        draft_dir = out.parent / "ProductVideo.draft"
-    elif out.suffix == ".draft":
-        draft_dir = out
-    else:
-        draft_dir = out.parent / "ProductVideo.draft"
-    draft_dir.mkdir(parents=True, exist_ok=True)
 
     # ── 1. 构建 materials ──
 
@@ -188,30 +176,11 @@ def export_jianying_json(
     }
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    # 写 draft_content.json
-    content_path = draft_dir / "draft_content.json"
-    content_path.write_text(
+    Path(output_path).write_text(
         json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-
-    # 写 draft_meta_info.json
-    res_w = int(timeline.resolution.split("x")[0]) if "x" in timeline.resolution else 1920
-    res_h = int(timeline.resolution.split("x")[1]) if "x" in timeline.resolution else 1080
-    meta = {
-        "draft_id": project["id"],
-        "draft_name": "Product Video",
-        "draft_resolution": {"width": res_w, "height": res_h},
-        "draft_ratio": f"{res_w}:{res_h}",
-        "duration": int(timeline.total_duration * _US),
-        "version": 1,
-    }
-    meta_path = draft_dir / "draft_meta_info.json"
-    meta_path.write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-
-    logger.info(f"剪映 .draft 导出完成: {draft_dir}")
-    return str(draft_dir)
+    logger.info(f"剪映参考 JSON 导出完成: {output_path}")
+    return output_path
 
 
 # ── FCPXML 导出 ────────────────────────────────────────────────
@@ -279,7 +248,7 @@ def export_fcpxml(
     ET.SubElement(resources, "effect", {
         "id": "title_effect",
         "name": "Basic Title",
-        "uid": ".../Titles.localized/Build In:Out.localized/Basic Title.localized/Basic Title.moti",
+        "uid": "/Applications/Final Cut Pro.app/Contents/PlugIns/MediaProviders/MotionEffect.fxp/Contents/Resources/PETemplates.localized/Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti",
     })
 
     # library → event → project → sequence
