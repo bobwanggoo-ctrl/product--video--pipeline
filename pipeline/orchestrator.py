@@ -58,7 +58,10 @@ class PipelineState:
                 self.steps[step.value] = StepState(step=step)
 
     def save(self, path: Path):
-        """Save state to JSON for checkpoint/resume."""
+        """Save state to JSON for checkpoint/resume.
+
+        output_data is serialized as file-path references only — no Pydantic objects.
+        """
         data = {
             "task_id": self.task_id,
             "mode": self.mode,
@@ -68,6 +71,7 @@ class PipelineState:
                     "status": s.status.value,
                     "attempts": s.attempts,
                     "error": s.error,
+                    "output_data": _serialize_output(name, s.output_data),
                 }
                 for name, s in self.steps.items()
             },
@@ -85,6 +89,9 @@ class PipelineState:
                 state.steps[name].status = StepStatus(step_data["status"])
                 state.steps[name].attempts = step_data.get("attempts", 0)
                 state.steps[name].error = step_data.get("error")
+                state.steps[name].output_data = _deserialize_output(
+                    name, step_data.get("output_data"),
+                )
         return state
 
 
@@ -123,11 +130,13 @@ class PipelineOrchestrator:
         try:
             result = self._dispatch(step, input_data)
             step_state.output_data = result
-            step_state.status = (
-                StepStatus.AWAITING_CONFIRM
-                if self.state.mode == "semi_auto"
-                else StepStatus.COMPLETED
-            )
+            # Don't override SKIPPED status (set by _run_compliance_check etc.)
+            if step_state.status != StepStatus.SKIPPED:
+                step_state.status = (
+                    StepStatus.AWAITING_CONFIRM
+                    if self.state.mode == "semi_auto"
+                    else StepStatus.COMPLETED
+                )
             return result
         except Exception as e:
             step_state.status = StepStatus.FAILED
@@ -151,6 +160,9 @@ class PipelineOrchestrator:
         if step == PipelineStep.STORYBOARD_TO_FRAME:
             return self._run_storyboard_to_frame(input_data)
 
+        if step == PipelineStep.COMPLIANCE_CHECK:
+            return self._run_compliance_check(input_data)
+
         if step == PipelineStep.FRAME_SELECTION:
             return self._run_frame_selection(input_data)
 
@@ -160,7 +172,6 @@ class PipelineOrchestrator:
         if step == PipelineStep.AUTO_EDIT:
             return self._run_auto_edit(input_data)
 
-        # Skill 3 待接入
         raise NotImplementedError(f"Step {step.value} not yet implemented.")
 
     # ── Skill 1 ──────────────────────────────────────
@@ -180,14 +191,7 @@ class PipelineOrchestrator:
     # ── Skill 2 ──────────────────────────────────────
 
     def _run_storyboard_to_frame(self, input_data: dict) -> dict:
-        """Skill 2: 分镜 → 画面帧。
-
-        input_data:
-            storyboard: Storyboard
-            reference_image_dir: str  (产品参考图目录)
-            output_dir: str           (帧图保存目录)
-            aspect_ratio: str         (可选, 默认 16:9)
-        """
+        """Skill 2: 分镜 → 画面帧。"""
         from skills.storyboard_to_frame.generator import generate_frames
 
         result = generate_frames(
@@ -197,6 +201,15 @@ class PipelineOrchestrator:
             aspect_ratio=input_data.get("aspect_ratio", "16:9"),
         )
         return result
+
+    # ── Skill 3（暂跳过）────────────────────────────────
+
+    def _run_compliance_check(self, input_data: dict) -> dict:
+        """Skill 3: 合规检查（暂未实现，跳过）。"""
+        logger.info("[Pipeline] 合规检查暂跳过，所有帧视为合规通过")
+        step_state = self.state.steps[PipelineStep.COMPLIANCE_CHECK.value]
+        step_state.status = StepStatus.SKIPPED
+        return {"compliance_results": None, "skipped": True}
 
     # ── 选材 ─────────────────────────────────────────
 
@@ -221,21 +234,22 @@ class PipelineOrchestrator:
     # ── Skill 4（分批 + 补拍）────────────────────────
 
     def _run_frame_to_video(self, input_data: dict) -> dict:
-        """Skill 4: 帧 → 视频，分批生成 + 补拍。
-
-        input_data:
-            plan: SelectionPlan
-            frame_paths: dict[int, str]  # {shot_id: frame_path}
-            storyboard: Storyboard
-            ... (Kling API 参数)
-
-        Returns:
-            {"video_paths": list[str], "successful_shot_ids": list[int]}
-        """
+        """Skill 4: 帧 → 视频，含运镜规划 + 分批生成 + 补拍。"""
         from pipeline.frame_selector import check_and_backfill, MIN_CLIPS_NEEDED
+        from skills.frame_to_video.motion_planner import plan_storyboard_motions
 
         plan = input_data["plan"]
         frame_paths = input_data.get("frame_paths", {})
+        storyboard = input_data.get("storyboard")
+
+        # 运镜规划（纯规则，不调 API）
+        storyboard_dict = storyboard.model_dump() if hasattr(storyboard, "model_dump") else storyboard
+        motion_results = plan_storyboard_motions(storyboard_dict)
+        motion_map = {m["shot_id"]: m["motion_prompt"] for m in motion_results}
+        logger.info(f"[Pipeline] 运镜规划完成: {len(motion_results)} 个镜头")
+
+        # 注入 motion_map 到 input_data 供 _generate_videos 使用
+        input_data["motion_map"] = motion_map
 
         # 第一批生成
         logger.info(f"[Pipeline] 第一批生成: {len(plan.first_batch)} 个")
@@ -263,6 +277,7 @@ class PipelineOrchestrator:
         return {
             "video_paths": video_paths,
             "successful_shot_ids": successful,
+            "motion_results": motion_results,
         }
 
     def _generate_videos(
@@ -339,3 +354,271 @@ class PipelineOrchestrator:
             preferred_route=input_data.get("preferred_route"),
         )
         return result
+
+    # ── run_all: 全流程串联 ─────────────────────────────
+
+    def run_all(self, initial_input: dict, run_dirs: dict) -> dict:
+        """Run the full pipeline, chaining data between steps.
+
+        Semi-auto mode pauses after each step for user confirmation.
+        Supports checkpoint resume — skips already completed steps.
+
+        Args:
+            initial_input: {sellpoint_text, reference_image_dir, bgm_dir}
+            run_dirs: from config.settings.create_run_dirs()
+        """
+        self._initial_input = initial_input
+        self._run_dirs = run_dirs
+
+        for step in self.STEP_ORDER:
+            step_state = self.state.steps[step.value]
+
+            # Skip completed / skipped steps (checkpoint resume)
+            if step_state.status in (StepStatus.COMPLETED, StepStatus.SKIPPED):
+                logger.info(f"[Pipeline] 跳过已完成步骤: {step.value}")
+                continue
+
+            input_data = self._build_step_input(step)
+
+            try:
+                result = self.run_step(step, input_data)
+            except Exception as e:
+                logger.error(f"[Pipeline] {step.value} 失败: {e}")
+                self.state.save(run_dirs["checkpoint"])
+                if self.state.mode == "semi_auto":
+                    action = self._handle_failure(step, e)
+                    if action == "retry":
+                        step_state.status = StepStatus.PENDING
+                        self.state.save(run_dirs["checkpoint"])
+                        return self.run_all(initial_input, run_dirs)
+                    elif action == "skip" and step == PipelineStep.COMPLIANCE_CHECK:
+                        step_state.status = StepStatus.SKIPPED
+                        continue
+                raise
+
+            # Semi-auto: show result and wait for confirmation
+            if step_state.status == StepStatus.AWAITING_CONFIRM:
+                self._show_step_result(step, result)
+                action = self._wait_for_confirmation(step)
+                if action == "retry":
+                    step_state.status = StepStatus.PENDING
+                    step_state.output_data = None
+                    self.state.save(run_dirs["checkpoint"])
+                    return self.run_all(initial_input, run_dirs)
+                elif action == "quit":
+                    self.state.save(run_dirs["checkpoint"])
+                    print(f"\n进度已保存: {run_dirs['checkpoint']}")
+                    return {"aborted": True}
+                else:
+                    self.confirm_step(step)
+
+            # Save checkpoint after each step
+            self.state.save(run_dirs["checkpoint"])
+
+        return self._collect_final_output()
+
+    def _build_step_input(self, step: PipelineStep) -> dict:
+        """Assemble input_data for a step from previous outputs + initial_input."""
+        ini = self._initial_input
+        dirs = self._run_dirs
+        out = lambda s: self.state.steps[s].output_data or {}
+
+        if step == PipelineStep.SELLPOINT_TO_STORYBOARD:
+            return {
+                "sellpoint_text": ini["sellpoint_text"],
+                "output_path": str(dirs["storyboard"]),
+            }
+
+        if step == PipelineStep.STORYBOARD_TO_FRAME:
+            return {
+                "storyboard": out("sellpoint_to_storyboard").get("storyboard"),
+                "reference_image_dir": ini.get("reference_image_dir", ""),
+                "output_dir": str(dirs["frames"]),
+            }
+
+        if step == PipelineStep.COMPLIANCE_CHECK:
+            return {
+                "storyboard": out("sellpoint_to_storyboard").get("storyboard"),
+                "frame_paths": out("storyboard_to_frame").get("frame_paths", {}),
+            }
+
+        if step == PipelineStep.FRAME_SELECTION:
+            return {
+                "storyboard": out("sellpoint_to_storyboard").get("storyboard"),
+                "compliance_results": out("compliance_check").get("compliance_results"),
+            }
+
+        if step == PipelineStep.FRAME_TO_VIDEO:
+            return {
+                "plan": out("frame_selection").get("plan"),
+                "frame_paths": out("storyboard_to_frame").get("frame_paths", {}),
+                "storyboard": out("sellpoint_to_storyboard").get("storyboard"),
+                "video_output_dir": str(dirs["videos"]),
+            }
+
+        if step == PipelineStep.AUTO_EDIT:
+            video_paths_dict = out("frame_to_video").get("video_paths", {})
+            sorted_paths = [video_paths_dict[sid] for sid in sorted(video_paths_dict.keys())]
+            return {
+                "video_paths": sorted_paths,
+                "storyboard": out("sellpoint_to_storyboard").get("storyboard"),
+                "output_dir": str(dirs["final"]),
+                "bgm_dir": ini.get("bgm_dir", ""),
+                "sellpoint_text": ini.get("sellpoint_text", ""),
+                "motion_results": out("frame_to_video").get("motion_results"),
+            }
+
+        return {}
+
+    def _collect_final_output(self) -> dict:
+        """Gather final results from all steps."""
+        skill5_out = self.state.steps["auto_edit"].output_data or {}
+        return {
+            "mp4": skill5_out.get("mp4"),
+            "srt_en": skill5_out.get("srt_en"),
+            "srt_cn": skill5_out.get("srt_cn"),
+            "jianying_json": skill5_out.get("jianying_json"),
+            "fcpxml": skill5_out.get("fcpxml"),
+        }
+
+    # ── 半自动交互 ──────────────────────────────────────
+
+    STEP_NAMES = {
+        "sellpoint_to_storyboard": "卖点 → 分镜",
+        "storyboard_to_frame": "分镜 → 画面帧",
+        "compliance_check": "合规检查",
+        "frame_selection": "选材",
+        "frame_to_video": "画面帧 → 视频",
+        "auto_edit": "自动剪辑",
+    }
+
+    def _show_step_result(self, step: PipelineStep, result: dict):
+        """Display step result summary to user."""
+        idx = self.STEP_ORDER.index(step) + 1
+        total = len(self.STEP_ORDER)
+        name = self.STEP_NAMES.get(step.value, step.value)
+
+        print(f"\n{'=' * 50}")
+        print(f"[Step {idx}/{total}] {name} 完成")
+
+        if step == PipelineStep.SELLPOINT_TO_STORYBOARD:
+            sb = result.get("storyboard")
+            if sb:
+                print(f"  镜头数: {sb.total_shots} | 场景组: {len(sb.scene_groups)}")
+                print(f"  产品类型: {sb.product_type}")
+                print(f"  输出: {self._run_dirs['storyboard']}")
+
+        elif step == PipelineStep.STORYBOARD_TO_FRAME:
+            fp = result.get("frame_paths", {})
+            fail = result.get("failed_shots", [])
+            print(f"  成功: {len(fp)} | 失败: {len(fail)}")
+            print(f"  输出: {self._run_dirs['frames']}")
+
+        elif step == PipelineStep.FRAME_SELECTION:
+            plan = result.get("plan")
+            if plan:
+                print(f"  第一批: {len(plan.first_batch)} | 备选: {len(plan.standby)}")
+
+        elif step == PipelineStep.FRAME_TO_VIDEO:
+            vp = result.get("video_paths", {})
+            sid = result.get("successful_shot_ids", [])
+            print(f"  成功: {len(sid)} 个视频")
+            print(f"  输出: {self._run_dirs['videos']}")
+
+        elif step == PipelineStep.AUTO_EDIT:
+            print(f"  成片: {result.get('mp4', 'N/A')}")
+            print(f"  剪映: {result.get('jianying_json', 'N/A')}")
+            print(f"  FCPXML: {result.get('fcpxml', 'N/A')}")
+
+        print(f"{'=' * 50}")
+
+    def _wait_for_confirmation(self, step: PipelineStep) -> str:
+        """Wait for user input in semi-auto mode.
+
+        Returns: 'confirm', 'retry', or 'quit'
+        """
+        while True:
+            choice = input("\n  [c] 确认继续  [r] 重试  [q] 退出保存\n  > ").strip().lower()
+            if choice in ("c", ""):
+                return "confirm"
+            elif choice == "r":
+                return "retry"
+            elif choice == "q":
+                return "quit"
+            else:
+                print("  请输入 c / r / q")
+
+    def _handle_failure(self, step: PipelineStep, error: Exception) -> str:
+        """Handle step failure in semi-auto mode."""
+        name = self.STEP_NAMES.get(step.value, step.value)
+        print(f"\n[!] {name} 失败: {error}")
+        while True:
+            choice = input("  [r] 重试  [q] 退出保存\n  > ").strip().lower()
+            if choice == "r":
+                return "retry"
+            elif choice == "q":
+                return "quit"
+            else:
+                print("  请输入 r / q")
+
+
+# ── Checkpoint 序列化辅助 ──────────────────────────────
+
+def _serialize_output(step_name: str, output_data: Any) -> Any:
+    """Serialize step output_data for JSON checkpoint.
+
+    Converts Pydantic models to dicts, keeps path strings and plain dicts as-is.
+    """
+    if output_data is None:
+        return None
+
+    if not isinstance(output_data, dict):
+        return output_data
+
+    result = {}
+    for k, v in output_data.items():
+        if hasattr(v, "model_dump"):
+            result[k] = {"__pydantic__": True, "__type__": type(v).__name__, "data": v.model_dump()}
+        elif hasattr(v, "__dataclass_fields__"):
+            import dataclasses
+            result[k] = {"__dataclass__": True, "__type__": type(v).__name__, "data": dataclasses.asdict(v)}
+        elif isinstance(v, dict):
+            # frame_paths/video_paths: convert int keys to str for JSON
+            result[k] = {str(kk): vv for kk, vv in v.items()}
+        else:
+            result[k] = v
+    return result
+
+
+def _deserialize_output(step_name: str, output_data: Any) -> Any:
+    """Deserialize step output_data from JSON checkpoint."""
+    if output_data is None:
+        return None
+
+    if not isinstance(output_data, dict):
+        return output_data
+
+    result = {}
+    for k, v in output_data.items():
+        if isinstance(v, dict) and v.get("__pydantic__"):
+            type_name = v["__type__"]
+            data = v["data"]
+            if type_name == "Storyboard":
+                from models.storyboard import Storyboard
+                result[k] = Storyboard.model_validate(data)
+            else:
+                result[k] = data
+        elif isinstance(v, dict) and v.get("__dataclass__"):
+            type_name = v["__type__"]
+            data = v["data"]
+            if type_name == "SelectionPlan":
+                from pipeline.frame_selector import SelectionPlan
+                result[k] = SelectionPlan(**data)
+            else:
+                result[k] = data
+        elif isinstance(v, dict) and k in ("frame_paths", "video_paths"):
+            # Restore int keys
+            result[k] = {int(kk): vv for kk, vv in v.items()}
+        else:
+            result[k] = v
+    return result

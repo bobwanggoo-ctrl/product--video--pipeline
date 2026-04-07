@@ -49,3 +49,24 @@ KLING_ASPECT_RATIO = os.getenv("KLING_ASPECT_RATIO", "16:9")
 # --- General ---
 HTTPS_PROXY = os.getenv("HTTPS_PROXY", "")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+
+def create_run_dirs(task_id: str) -> dict[str, Path]:
+    """Create isolated output directories for a pipeline run.
+
+    Returns dict with keys: root, storyboard, sellpoint, frames, videos, final, checkpoint
+    """
+    root = OUTPUT_DIR / task_id
+    dirs = {
+        "root": root,
+        "storyboard": root / "storyboard.json",
+        "sellpoint": root / "sellpoint.txt",
+        "frames": root / "frames",
+        "videos": root / "videos",
+        "final": root / "final",
+        "checkpoint": root / "checkpoint.json",
+    }
+    # Create directories (not file paths)
+    for key in ("root", "frames", "videos", "final"):
+        dirs[key].mkdir(parents=True, exist_ok=True)
+    return dirs
