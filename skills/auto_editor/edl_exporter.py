@@ -25,17 +25,33 @@ def export_jianying_json(
     output_path: str,
     srt_path: str = "",
 ) -> str:
-    """导出剪映专业版兼容的 draft_content.json。
+    """导出剪映专业版兼容的 .draft 文件夹。
 
-    格式结构：
-    - materials: {videos, audios, texts}  素材引用池
-    - tracks: [{type, segments}]          时间线轨道
-    时间单位：微秒。
+    .draft 文件夹结构：
+      ProductVideo.draft/
+        draft_content.json   — 时间轴、素材、轨道
+        draft_meta_info.json — 项目元数据（分辨率、时长、版本）
+
+    Args:
+        output_path: 输出路径（传入的路径会被转为 .draft 目录）。
+
+    Returns:
+        .draft 文件夹路径。
     """
     import uuid
 
     def _uid() -> str:
         return uuid.uuid4().hex[:24].upper()
+
+    # 确定 .draft 目录路径
+    out = Path(output_path)
+    if out.suffix == ".json":
+        draft_dir = out.parent / "ProductVideo.draft"
+    elif out.suffix == ".draft":
+        draft_dir = out
+    else:
+        draft_dir = out.parent / "ProductVideo.draft"
+    draft_dir.mkdir(parents=True, exist_ok=True)
 
     # ── 1. 构建 materials ──
 
@@ -172,11 +188,30 @@ def export_jianying_json(
     }
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(output_path).write_text(
+    # 写 draft_content.json
+    content_path = draft_dir / "draft_content.json"
+    content_path.write_text(
         json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    logger.info(f"剪映 JSON 导出完成: {output_path}")
-    return output_path
+
+    # 写 draft_meta_info.json
+    res_w = int(timeline.resolution.split("x")[0]) if "x" in timeline.resolution else 1920
+    res_h = int(timeline.resolution.split("x")[1]) if "x" in timeline.resolution else 1080
+    meta = {
+        "draft_id": project["id"],
+        "draft_name": "Product Video",
+        "draft_resolution": {"width": res_w, "height": res_h},
+        "draft_ratio": f"{res_w}:{res_h}",
+        "duration": int(timeline.total_duration * _US),
+        "version": 1,
+    }
+    meta_path = draft_dir / "draft_meta_info.json"
+    meta_path.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    logger.info(f"剪映 .draft 导出完成: {draft_dir}")
+    return str(draft_dir)
 
 
 # ── FCPXML 导出 ────────────────────────────────────────────────
@@ -262,6 +297,7 @@ def export_fcpxml(
 
     # 构建 spine：视频 clip + transition + attached 字幕 + attached BGM
     current_offset = 0.0
+    title_idx = 0
 
     for i, clip in enumerate(timeline.clips):
         # 在两个 clip 之间插入 transition
@@ -293,6 +329,8 @@ def export_fcpxml(
 
         # 字幕作为 attached title（lane=1 表示字幕轨在视频上方）
         if clip.subtitle_text:
+            title_idx += 1
+            ts_id = f"ts{title_idx}"
             title_elem = ET.SubElement(clip_elem, "title", {
                 "ref": "title_effect",
                 "name": clip.subtitle_text,
@@ -306,9 +344,9 @@ def export_fcpxml(
                 "value": "0 -450",
             })
             text_elem = ET.SubElement(title_elem, "text")
-            ts = ET.SubElement(text_elem, "text-style", ref="ts1")
+            ts = ET.SubElement(text_elem, "text-style", ref=ts_id)
             ts.text = clip.subtitle_text
-            ET.SubElement(title_elem, "text-style-def", id="ts1").append(
+            ET.SubElement(title_elem, "text-style-def", id=ts_id).append(
                 _make_element("text-style", {
                     "font": "Helvetica Neue",
                     "fontSize": "42",
@@ -329,7 +367,6 @@ def export_fcpxml(
                 "offset": _rs(clip.trim_start),
                 "duration": _rs(timeline.total_duration),
                 "start": "0s",
-                "role": "dialogue",
             })
 
         # 推进 offset
