@@ -205,9 +205,11 @@ def export_fcpxml(
     frame_dur = f"100/{fps * 100}s"
 
     def _rs(seconds: float) -> str:
-        """秒 → FCPXML rational time。用 100 倍 fps 为分母避免舍入。"""
+        """秒 → FCPXML rational time，对齐到帧边界。"""
         base = fps * 100
-        ticks = round(seconds * base)
+        # 先对齐到帧边界（round 到最近的帧），再转为 rational
+        frames = round(seconds * fps)
+        ticks = frames * 100
         return f"{ticks}/{base}s"
 
     # ── resources ──
@@ -284,6 +286,10 @@ def export_fcpxml(
     current_offset = 0.0
     ts_counter = 0
 
+    def _snap(seconds: float) -> float:
+        """Snap to nearest frame boundary."""
+        return round(seconds * fps) / fps
+
     for i, clip in enumerate(timeline.clips):
         # Transition between clips
         need_transition = False
@@ -294,12 +300,12 @@ def export_fcpxml(
                 need_transition = True
 
         if need_transition:
-            trans_dur = clip.transition_duration
+            trans_dur = _snap(clip.transition_duration)
             ET.SubElement(spine, "transition", {
                 "name": _get_fcp_transition_name(clip.transition_in or timeline.clips[i - 1].transition_out),
                 "duration": _rs(trans_dur),
             })
-            current_offset -= trans_dur
+            current_offset = _snap(current_offset - trans_dur)
 
         # asset-clip
         clip_elem = ET.SubElement(spine, "asset-clip", {
@@ -366,11 +372,11 @@ def export_fcpxml(
                     "alignment": "center",
                 })
 
-        # Advance offset
+        # Advance offset (snap to frame boundary)
         overlap = 0.0
         if clip.transition_out != "cut" and i < len(timeline.clips) - 1:
-            overlap = clip.transition_duration
-        current_offset += clip.display_duration - overlap
+            overlap = _snap(clip.transition_duration)
+        current_offset = _snap(current_offset + clip.display_duration - overlap)
 
     # Write
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
