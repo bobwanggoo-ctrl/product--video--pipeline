@@ -25,34 +25,76 @@ def export_jianying_json(
     output_path: str,
     srt_path: str = "",
 ) -> str:
-    """导出剪映兼容的 JSON 项目文件（draft_content.json 简化格式）。
+    """导出剪映专业版兼容的 draft_content.json。
 
-    注意：剪映的完整 draft_content.json 格式非常复杂，
-    这里导出的是一个可被剪映识别的简化版本，包含：
-    - 视频轨道：片段列表 + trim + 转场
-    - 文本轨道：字幕
-    - 音频轨道：BGM 引用
-
-    Args:
-        timeline: 剪辑时间线。
-        output_path: 输出 JSON 路径。
-        srt_path: SRT 字幕文件路径。
-
-    Returns:
-        输出文件路径。
+    格式结构：
+    - materials: {videos, audios, texts}  素材引用池
+    - tracks: [{type, segments}]          时间线轨道
+    时间单位：微秒。
     """
+    import uuid
+
+    def _uid() -> str:
+        return uuid.uuid4().hex[:24].upper()
+
+    # ── 1. 构建 materials ──
+
+    # 视频素材
+    video_materials = []
+    for clip in timeline.clips:
+        video_materials.append({
+            "id": _uid(),
+            "type": "video",
+            "material_name": f"Shot {clip.shot_id}",
+            "path": str(Path(clip.source_path).resolve()),
+            "duration": int(clip.trim_end * _US),
+            "width": int(timeline.resolution.split("x")[0]) if "x" in timeline.resolution else 1920,
+            "height": int(timeline.resolution.split("x")[1]) if "x" in timeline.resolution else 1080,
+        })
+
+    # 音频素材
+    audio_materials = []
+    if timeline.bgm_path:
+        audio_materials.append({
+            "id": _uid(),
+            "type": "audio",
+            "material_name": "BGM",
+            "path": str(Path(timeline.bgm_path).resolve()),
+            "duration": int(timeline.total_duration * _US),
+            "volume": timeline.bgm_volume,
+        })
+
+    # 文本素材
+    text_materials = []
+    for clip in timeline.clips:
+        if clip.subtitle_text:
+            text_materials.append({
+                "id": _uid(),
+                "type": "text",
+                "content": clip.subtitle_text,
+                "content_cn": clip.subtitle_text_cn,
+                "style": clip.subtitle_style,
+            })
+
+    materials = {
+        "videos": video_materials,
+        "audios": audio_materials,
+        "texts": text_materials,
+    }
+
+    # ── 2. 构建 tracks ──
+
     # 视频轨道
     video_segments = []
-    current_time_us = 0  # 剪映用微秒
+    current_time_us = 0
 
-    for clip in timeline.clips:
-        duration_us = int(clip.display_duration * 1_000_000)
-        trim_start_us = int(clip.trim_start * 1_000_000)
-        trim_end_us = int(clip.trim_end * 1_000_000)
+    for i, clip in enumerate(timeline.clips):
+        duration_us = int(clip.display_duration * _US)
+        trim_start_us = int(clip.trim_start * _US)
+        trim_end_us = int(clip.trim_end * _US)
 
         segment = {
-            "material_id": f"shot_{clip.shot_id}",
-            "source_path": str(Path(clip.source_path).resolve()),
+            "material_id": video_materials[i]["id"],
             "target_timerange": {
                 "start": current_time_us,
                 "duration": duration_us,
@@ -62,58 +104,71 @@ def export_jianying_json(
                 "duration": trim_end_us - trim_start_us,
             },
             "speed": clip.speed_factor,
-            "transition": {
-                "type": clip.transition_out,
-                "duration": int(clip.transition_duration * 1_000_000) if clip.transition_out != "cut" else 0,
-            },
+            "extra_material_refs": [],
         }
+
+        # 转场信息
+        if clip.transition_out != "cut":
+            segment["transition"] = {
+                "type": clip.transition_out,
+                "duration": int(clip.transition_duration * _US),
+            }
+
         video_segments.append(segment)
 
-        overlap = clip.transition_duration * 1_000_000 if clip.transition_out != "cut" else 0
+        overlap = clip.transition_duration * _US if clip.transition_out != "cut" else 0
         current_time_us += duration_us - int(overlap)
 
     # 文本轨道（字幕）
     text_segments = []
+    text_mat_idx = 0
     current_time_us = 0
     for clip in timeline.clips:
-        duration_us = int(clip.display_duration * 1_000_000)
-        if clip.subtitle_text:
+        duration_us = int(clip.display_duration * _US)
+        if clip.subtitle_text and text_mat_idx < len(text_materials):
             text_segments.append({
-                "content": clip.subtitle_text,
-                "content_cn": clip.subtitle_text_cn,
-                "style": clip.subtitle_style,
+                "material_id": text_materials[text_mat_idx]["id"],
                 "target_timerange": {
                     "start": current_time_us,
                     "duration": duration_us,
                 },
             })
-        overlap = clip.transition_duration * 1_000_000 if clip.transition_out != "cut" else 0
+            text_mat_idx += 1
+        overlap = clip.transition_duration * _US if clip.transition_out != "cut" else 0
         current_time_us += duration_us - int(overlap)
 
     # 音频轨道（BGM）
     audio_segments = []
-    if timeline.bgm_path:
+    if timeline.bgm_path and audio_materials:
         audio_segments.append({
-            "source_path": str(Path(timeline.bgm_path).resolve()),
-            "volume": timeline.bgm_volume,
-            "fade_out_sec": timeline.bgm_fade_out_sec,
+            "material_id": audio_materials[0]["id"],
             "target_timerange": {
                 "start": 0,
-                "duration": int(timeline.total_duration * 1_000_000),
+                "duration": int(timeline.total_duration * _US),
             },
+            "volume": timeline.bgm_volume,
+            "fade_out_duration": int(timeline.bgm_fade_out_sec * _US),
         })
 
+    tracks = [
+        {"type": "video", "segments": video_segments},
+        {"type": "text", "segments": text_segments},
+        {"type": "audio", "segments": audio_segments},
+    ]
+
+    # ── 3. 组装 draft_content ──
+
     project = {
-        "version": "1.0",
-        "generator": "product-video-pipeline",
-        "resolution": timeline.resolution,
-        "total_duration_us": int(timeline.total_duration * 1_000_000),
-        "tracks": {
-            "video": video_segments,
-            "text": text_segments,
-            "audio": audio_segments,
+        "id": _uid(),
+        "name": "Product Video",
+        "materials": materials,
+        "tracks": tracks,
+        "duration": int(timeline.total_duration * _US),
+        "canvas_config": {
+            "width": int(timeline.resolution.split("x")[0]) if "x" in timeline.resolution else 1920,
+            "height": int(timeline.resolution.split("x")[1]) if "x" in timeline.resolution else 1080,
+            "ratio": timeline.resolution,
         },
-        "srt_path": str(Path(srt_path).resolve()) if srt_path else "",
     }
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -131,20 +186,9 @@ def export_fcpxml(
     output_path: str,
     srt_path: str = "",
 ) -> str:
-    """导出 Final Cut Pro 兼容的 FCPXML 文件。
+    """导出 Final Cut Pro 兼容的 FCPXML 1.9 文件。
 
-    FCPXML v1.11 格式，包含：
-    - spine: 视频片段序列 + 转场
-    - title elements: 字幕
-    - audio: BGM 引用
-
-    Args:
-        timeline: 剪辑时间线。
-        output_path: 输出 FCPXML 路径。
-        srt_path: SRT 字幕文件路径（记录在 note 中供参考）。
-
-    Returns:
-        输出文件路径。
+    包含：视频轨（spine）、字幕（title attached clips）、BGM（connected audio）。
     """
     # FCPXML 根元素（v1.9 兼容 FCP 10.4+）
     fcpxml = ET.Element("fcpxml", version="1.9")
@@ -155,86 +199,144 @@ def export_fcpxml(
     width = res_parts[0] if len(res_parts) == 2 else "1920"
     height = res_parts[1] if len(res_parts) == 2 else "1080"
 
-    def _rational_sec(seconds: float) -> str:
+    def _rs(seconds: float) -> str:
         """将秒数转为 FCPXML rational time（基于帧数）。"""
         frames = round(seconds * fps)
         return f"{frames}/{fps}s"
 
-    # resources: 素材引用
+    # resources: 格式 + 素材
     resources = ET.SubElement(fcpxml, "resources")
-    format_elem = ET.SubElement(resources, "format", {
+    ET.SubElement(resources, "format", {
         "id": "r1",
         "name": f"FFVideoFormat{height}p{fps}",
         "frameDuration": f"1/{fps}s",
         "width": width, "height": height,
     })
 
-    # 为每个片段和 BGM 创建 asset（v1.9: src 在 media-rep 子元素中）
-    for i, clip in enumerate(timeline.clips):
+    # 视频素材 assets
+    for clip in timeline.clips:
         asset_elem = ET.SubElement(resources, "asset", {
             "id": f"clip_{clip.shot_id}",
             "name": f"Shot {clip.shot_id}",
             "hasVideo": "1", "hasAudio": "0",
             "format": "r1",
+            "duration": _rs(clip.trim_end),
         })
         ET.SubElement(asset_elem, "media-rep", {
             "kind": "original-media",
             "src": Path(clip.source_path).resolve().as_uri(),
         })
 
+    # BGM 素材 asset
     if timeline.bgm_path:
         bgm_asset = ET.SubElement(resources, "asset", {
             "id": "bgm",
             "name": "BGM",
             "hasVideo": "0", "hasAudio": "1",
+            "format": "r1",
         })
         ET.SubElement(bgm_asset, "media-rep", {
             "kind": "original-media",
             "src": Path(timeline.bgm_path).resolve().as_uri(),
         })
 
+    # 字幕 effect 资源（FCP 内置 Basic Title）
+    ET.SubElement(resources, "effect", {
+        "id": "title_effect",
+        "name": "Basic Title",
+        "uid": ".../Titles.localized/Build In:Out.localized/Basic Title.localized/Basic Title.moti",
+    })
+
     # library → event → project → sequence
     library = ET.SubElement(fcpxml, "library")
     event = ET.SubElement(library, "event", name="Auto Edit")
-    project = ET.SubElement(event, "project", name="Product Video")
-    sequence = ET.SubElement(project, "sequence", {
+    project_elem = ET.SubElement(event, "project", name="Product Video")
+    sequence = ET.SubElement(project_elem, "sequence", {
         "format": "r1",
-        "duration": _rational_sec(timeline.total_duration),
+        "duration": _rs(timeline.total_duration),
         "tcStart": "0s",
         "tcFormat": "NDF",
     })
 
     spine = ET.SubElement(sequence, "spine")
 
-    # 视频片段（asset-clip 引用 asset）
+    # 构建 spine：视频 clip + transition + attached 字幕 + attached BGM
+    current_offset = 0.0
+
     for i, clip in enumerate(timeline.clips):
+        # 在两个 clip 之间插入 transition
+        need_transition = False
+        if i > 0:
+            prev_out = timeline.clips[i - 1].transition_out
+            curr_in = clip.transition_in
+            if prev_out != "cut" or curr_in != "cut":
+                need_transition = True
+
+        if need_transition:
+            trans_dur = clip.transition_duration
+            trans_elem = ET.SubElement(spine, "transition", {
+                "name": _get_fcp_transition_name(clip.transition_in or timeline.clips[i - 1].transition_out),
+                "duration": _rs(trans_dur),
+            })
+            # transition 会吃掉前后各一半时长，offset 向前回退
+            current_offset -= trans_dur
+
+        # asset-clip（start = trim 起点，duration = 展示时长）
         clip_elem = ET.SubElement(spine, "asset-clip", {
             "ref": f"clip_{clip.shot_id}",
             "name": f"Shot {clip.shot_id}",
-            "offset": _rational_sec(clip.trim_start),
-            "duration": _rational_sec(clip.display_duration),
-            "start": _rational_sec(clip.trim_start),
+            "offset": _rs(current_offset),
+            "duration": _rs(clip.display_duration),
+            "start": _rs(clip.trim_start),
+            "tcFormat": "NDF",
         })
 
-        # 转场
-        if i > 0 and clip.transition_in != "cut":
-            ET.SubElement(spine, "transition", {
-                "name": clip.transition_in.capitalize(),
-                "duration": _rational_sec(clip.transition_duration),
+        # 字幕作为 attached title（lane=1 表示字幕轨在视频上方）
+        if clip.subtitle_text:
+            title_elem = ET.SubElement(clip_elem, "title", {
+                "ref": "title_effect",
+                "name": clip.subtitle_text,
+                "lane": "1",
+                "offset": _rs(clip.trim_start),
+                "duration": _rs(clip.display_duration),
+            })
+            param_text = ET.SubElement(title_elem, "param", {
+                "name": "Position",
+                "key": "9999/999166631/999166633/2/354/999169573/401",
+                "value": "0 -450",
+            })
+            text_elem = ET.SubElement(title_elem, "text")
+            ts = ET.SubElement(text_elem, "text-style", ref="ts1")
+            ts.text = clip.subtitle_text
+            ET.SubElement(title_elem, "text-style-def", id="ts1").append(
+                _make_element("text-style", {
+                    "font": "Helvetica Neue",
+                    "fontSize": "42",
+                    "fontColor": "1 1 1 1",
+                    "bold": "1",
+                    "shadowColor": "0 0 0 0.75",
+                    "shadowOffset": "3 315",
+                    "alignment": "center",
+                })
+            )
+
+        # BGM attached 到第一个 clip
+        if i == 0 and timeline.bgm_path:
+            ET.SubElement(clip_elem, "asset-clip", {
+                "ref": "bgm",
+                "name": "BGM",
+                "lane": "-1",
+                "offset": _rs(clip.trim_start),
+                "duration": _rs(timeline.total_duration),
+                "start": "0s",
+                "role": "dialogue",
             })
 
-    # BGM 音频轨道（asset-clip，lane=-1 表示音频轨）
-    if timeline.bgm_path:
-        ET.SubElement(spine, "asset-clip", {
-            "ref": "bgm",
-            "name": "BGM",
-            "lane": "-1",
-            "offset": "0s",
-            "duration": _rational_sec(timeline.total_duration),
-        })
-
-    # 注：字幕不嵌入 FCPXML（需要 Motion template），以独立 SRT 文件提供
-    # 用户可在 FCP 中通过 File → Import → Captions 导入 SRT
+        # 推进 offset
+        overlap = 0.0
+        if clip.transition_out != "cut" and i < len(timeline.clips) - 1:
+            overlap = clip.transition_duration
+        current_offset += clip.display_duration - overlap
 
     # 写入文件
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -244,3 +346,18 @@ def export_fcpxml(
 
     logger.info(f"FCPXML 导出完成: {output_path}")
     return output_path
+
+
+def _get_fcp_transition_name(transition_type: str) -> str:
+    """Map our transition types to FCP built-in transition names."""
+    mapping = {
+        "dissolve": "Cross Dissolve",
+        "fade": "Cross Dissolve",
+        "cut": "Cut",
+    }
+    return mapping.get(transition_type, "Cross Dissolve")
+
+
+def _make_element(tag: str, attribs: dict) -> ET.Element:
+    """Helper to create an Element with attributes."""
+    return ET.Element(tag, attribs)

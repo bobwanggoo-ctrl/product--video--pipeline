@@ -55,9 +55,11 @@ def build_user_message(
         quality = f"质量={c.quality_score:.1f}" if c.quality_score >= 0 else "未检测"
         issues = f" 问题:[{c.quality_issues}]" if c.quality_issues else ""
         desc = f" 画面:{c.scene_description}" if c.scene_description else ""
+        # prompt_cn 包含模特姿态、镜头角度等视觉细节，帮助字幕匹配实际画面
+        visual = f" 画面描述:{c.prompt_cn[:80]}" if c.prompt_cn else ""
         clip_info.append(
             f"  Shot {c.shot_id} | {c.shot_type:6s} | {c.duration:.1f}s | "
-            f"{status} | {quality}{issues}{desc} | "
+            f"{status} | {quality}{issues}{desc}{visual} | "
             f"目的: {c.purpose} | 运镜: {c.motion_prompt[:50]}"
         )
 
