@@ -269,7 +269,7 @@ def export_fcpxml(
         "uid": ".../Titles.localized/Essential Titles.localized/Essential Title.localized/Essential Title.moti",
     })
 
-    # 转场 effect（FCP 内置 Cross Dissolve）
+    # 转场 effect（FCP 内置 Cross Dissolve）— 备用，transition 元素用 name 而非 ref
     dissolve_ref = f"r{asset_id_counter}"
     asset_id_counter += 1
     ET.SubElement(resources, "effect", {
@@ -312,7 +312,7 @@ def export_fcpxml(
         if need_transition:
             trans_dur = _snap(clip.transition_duration)
             ET.SubElement(spine, "transition", {
-                "ref": dissolve_ref,
+                "name": "Cross Dissolve",
                 "duration": _rs(trans_dur),
             })
 
