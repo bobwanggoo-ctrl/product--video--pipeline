@@ -151,6 +151,12 @@ def convert(
         ok, errors = validate_storyboard(data)
         if not ok:
             logger.warning(f"[Converter] Validation warnings: {errors}")
+            # 硬约束失败（如 0 个 scene_groups）→ 重试
+            has_fail = any(e.startswith("[FAIL]") for e in errors)
+            if has_fail and attempt <= max_retries:
+                logger.warning(f"[Converter] 硬约束校验失败 (attempt {attempt})，重试...")
+                last_err = ValueError(f"Validation failed: {errors}")
+                continue
 
         # Build Storyboard model
         storyboard = Storyboard.model_validate(data)
