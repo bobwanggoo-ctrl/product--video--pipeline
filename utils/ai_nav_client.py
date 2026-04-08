@@ -254,14 +254,23 @@ class AiNavClient:
         result_urls = []
         result_text = ""
         response_json = task_data.get("responseJson") or {}
-        for item in response_json.get("data", []):
-            if isinstance(item, dict):
-                if item.get("url"):
-                    result_urls.append(item["url"])
-                if item.get("text"):
-                    result_text += item["text"]
-            elif isinstance(item, str):
-                result_text += item
+
+        # 格式 1: LLM 返回 — OpenAI choices 格式
+        choices = response_json.get("choices", [])
+        if choices:
+            msg = (choices[0].get("message") or {}) if isinstance(choices[0], dict) else {}
+            result_text = msg.get("content", "")
+
+        # 格式 2: 生图返回 — data 数组格式
+        if not result_text:
+            for item in response_json.get("data", []):
+                if isinstance(item, dict):
+                    if item.get("url"):
+                        result_urls.append(item["url"])
+                    if item.get("text"):
+                        result_text += item["text"]
+                elif isinstance(item, str):
+                    result_text += item
 
         # 兜底：responseJson 本身可能是文本
         if not result_urls and not result_text:
