@@ -88,7 +88,7 @@ class LLMClient:
             user_message=prompt,
             image_urls=image_urls,
         )
-        result = client.wait_for_task(task_id, timeout=120.0)
+        result = client.wait_for_task(task_id, timeout=180.0)
 
         text = result.get("result_text", "")
         if not text:

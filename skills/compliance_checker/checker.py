@@ -28,7 +28,7 @@ _IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
 # 并发控制
 MAX_WORKERS = 3
-TIMEOUT_PER_SHOT = 60.0
+TIMEOUT_PER_SHOT = 200.0
 
 # Final_Status → score 映射
 _STATUS_SCORE = {
