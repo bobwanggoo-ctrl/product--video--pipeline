@@ -38,6 +38,18 @@ class BgmInfo(BaseModel):
     path: str
 
 
+class FontInfo(BaseModel):
+    """字体库条目，供 LLM 选择字幕字体。"""
+    name: str                    # 显示名（如 "Helvetica Neue Bold"）
+    family: str                  # 字体族（如 "Helvetica Neue"）
+    style: str = "Regular"       # 样式（Regular / Bold / Italic ...）
+    path: str                    # 字体文件路径
+    category: str = "sans-serif" # sans-serif | serif | display | handwriting | cjk-sans | cjk-art
+    has_cjk: bool = False        # 是否支持中文
+    tags: list[str] = Field(default_factory=list)  # ["modern","clean","bold",...]
+    description: str = ""        # 适用场景（给 LLM 参考）
+
+
 class LLMEditingDecision(BaseModel):
     """LLM-generated editing decisions."""
     bgm_choice: str = ""

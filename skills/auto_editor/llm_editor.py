@@ -11,7 +11,7 @@ from typing import Optional
 
 from models.storyboard import Storyboard
 from models.timeline import (
-    BgmInfo, EditingTimeline, TimelineClip,
+    BgmInfo, EditingTimeline, FontInfo, TimelineClip,
 )
 from models.video_clip import ClipAnalysis
 from utils.json_repair import extract_json
@@ -46,6 +46,7 @@ def build_user_message(
     storyboard: Storyboard,
     bgm_list: list[BgmInfo],
     sellpoint_text: str = "",
+    font_list: list[FontInfo] | None = None,
 ) -> str:
     """构建发给 LLM 的 user message。"""
     # 片段信息
@@ -68,6 +69,12 @@ def build_user_message(
     for b in bgm_list:
         bgm_info.append(f"  {b.name} | {b.duration:.0f}s | {b.path}")
 
+    # 字体列表
+    font_section = ""
+    if font_list:
+        from skills.auto_editor.font_scanner import format_font_list_for_llm
+        font_section = f"\n## 可用字体库\n{format_font_list_for_llm(font_list)}\n"
+
     # 产品信息
     product_info = (
         f"产品类型: {storyboard.product_type}\n"
@@ -88,7 +95,7 @@ def build_user_message(
 
 ## 可用 BGM（共 {len(bgm_list)} 首）
 {chr(10).join(bgm_info) if bgm_info else '  (无可用 BGM，bgm_choice 留空)'}
-
+{font_section}
 ## 任务要求
 请根据上述剪辑规则和字幕规则，为这些片段做出完整的剪辑决策。
 直接输出 JSON，不要有其它说明文字。"""
@@ -98,6 +105,7 @@ def make_editing_decision(
     clips: list[ClipAnalysis],
     storyboard: Storyboard,
     bgm_list: list[BgmInfo],
+    font_list: list[FontInfo] | None = None,
     sellpoint_text: str = "",
     preferred_llm: Optional[str] = None,
     preferred_route: Optional[str] = None,
@@ -109,6 +117,7 @@ def make_editing_decision(
         clips: video_analyzer 输出的片段分析列表。
         storyboard: Skill 1 输出的分镜数据。
         bgm_list: bgm_scanner 输出的 BGM 列表。
+        font_list: font_scanner 输出的字体列表（可选）。
         sellpoint_text: 原始卖点文案（用于字幕提炼）。
         preferred_llm: LLM 选择。
         preferred_route: Gemini 路由选择。
@@ -118,7 +127,7 @@ def make_editing_decision(
         校验通过的 EditingTimeline。
     """
     system_prompt = load_rules()
-    user_message = build_user_message(clips, storyboard, bgm_list, sellpoint_text)
+    user_message = build_user_message(clips, storyboard, bgm_list, sellpoint_text, font_list)
 
     # 构建 clip 查找表（用于校验时获取原始时长）
     clip_map: dict[int, ClipAnalysis] = {c.shot_id: c for c in clips}

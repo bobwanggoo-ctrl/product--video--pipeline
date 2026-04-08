@@ -348,6 +348,7 @@ class PipelineOrchestrator:
             storyboard=input_data["storyboard"],
             output_dir=input_data["output_dir"],
             bgm_dir=input_data.get("bgm_dir", ""),
+            font_dir=input_data.get("font_dir", ""),
             sellpoint_text=input_data.get("sellpoint_text", ""),
             motion_results=input_data.get("motion_results"),
             preferred_llm=input_data.get("preferred_llm"),
@@ -464,6 +465,7 @@ class PipelineOrchestrator:
                 "storyboard": out("sellpoint_to_storyboard").get("storyboard"),
                 "output_dir": str(dirs["final"]),
                 "bgm_dir": ini.get("bgm_dir", ""),
+                "font_dir": ini.get("font_dir", ""),
                 "sellpoint_text": ini.get("sellpoint_text", ""),
                 "motion_results": out("frame_to_video").get("motion_results"),
             }

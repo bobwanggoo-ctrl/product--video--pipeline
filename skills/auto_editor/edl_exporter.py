@@ -269,13 +269,13 @@ def export_fcpxml(
         "uid": ".../Titles.localized/Essential Titles.localized/Essential Title.localized/Essential Title.moti",
     })
 
-    # 转场 effect（FCP 内置 Cross Dissolve）— 备用，transition 元素用 name 而非 ref
+    # 转场 effect（FCP 内置 Cross Dissolve — 使用 FxPlug uid）
     dissolve_ref = f"r{asset_id_counter}"
     asset_id_counter += 1
     ET.SubElement(resources, "effect", {
         "id": dissolve_ref,
-        "name": "Cross Dissolve",
-        "uid": ".../Transitions.localized/Dissolve.localized/Cross Dissolve.localized/Cross Dissolve.motr",
+        "name": "交叉叠化",
+        "uid": "FxPlug:4731E73A-8DAC-4113-9A30-AE85B1761265",
     })
 
     # ── library → event → project → sequence ──
@@ -284,17 +284,16 @@ def export_fcpxml(
     project_elem = ET.SubElement(event, "project", name="Product Video")
     sequence = ET.SubElement(project_elem, "sequence", {
         "format": "r1",
-        "duration": _rs(timeline.total_duration),
         "tcStart": "0s",
         "tcFormat": "NDF",
     })
+    bgm_elem = None  # 延后设置 duration
 
     spine = ET.SubElement(sequence, "spine")
 
     # ── spine: clips + transitions + titles + BGM ──
-    # offset 按顺序累加，不手动减 transition 时长（FCP 自动处理重叠）
-    current_offset = 0.0
     ts_counter = 0
+    current_offset = 0.0  # 追踪 spine 位置（用于 transition offset）
 
     def _snap(seconds: float) -> float:
         """Snap to nearest frame boundary."""
@@ -310,29 +309,49 @@ def export_fcpxml(
                 need_transition = True
 
         if need_transition:
-            trans_dur = _snap(clip.transition_duration)
-            ET.SubElement(spine, "transition", {
-                "name": "Cross Dissolve",
+            # transition_duration: 优先用当前 clip 的，回退用前一个 clip 的
+            trans_dur_sec = clip.transition_duration
+            if trans_dur_sec <= 0:
+                trans_dur_sec = timeline.clips[i - 1].transition_duration
+            if trans_dur_sec <= 0:
+                trans_dur_sec = 0.4  # 兜底默认
+            trans_dur = _snap(trans_dur_sec)
+            # transition offset = 前一个 clip 结束前 transition 重叠的起点
+            trans_offset = _snap(current_offset - trans_dur / 2)
+            trans_elem = ET.SubElement(spine, "transition", {
+                "name": "交叉叠化",
+                "offset": _rs(trans_offset),
                 "duration": _rs(trans_dur),
+            })
+            # filter-video 自闭合（不加 data/param，FCP 用默认设置）
+            ET.SubElement(trans_elem, "filter-video", {
+                "ref": dissolve_ref,
+                "name": "交叉叠化",
             })
 
         # asset-clip
-        clip_elem = ET.SubElement(spine, "asset-clip", {
+        # 转场后的 clip 需要 start 属性提供前句柄（transition 需要额外素材做淡入）
+        clip_attrs = {
             "ref": clip_ref_map[clip.shot_id],
             "offset": _rs(current_offset),
             "name": f"Shot {clip.shot_id}",
             "duration": _rs(clip.display_duration),
             "tcFormat": "NDF",
-        })
+        }
+        if need_transition:
+            # 提供 transition 半长的前句柄
+            handle = _snap(trans_dur / 2)
+            clip_attrs["start"] = _rs(handle)
+        clip_elem = ET.SubElement(spine, "asset-clip", clip_attrs)
 
-        # BGM attached to first clip
+        # BGM attached to first clip（duration 延后补齐）
         if i == 0 and bgm_ref:
-            ET.SubElement(clip_elem, "asset-clip", {
+            bgm_elem = ET.SubElement(clip_elem, "asset-clip", {
                 "ref": bgm_ref,
                 "lane": "-1",
                 "offset": "0s",
                 "name": "BGM",
-                "duration": _rs(timeline.total_duration),
+                "duration": "0s",  # placeholder, 循环结束后更新
                 "audioRole": "dialogue",
             })
 
@@ -341,7 +360,7 @@ def export_fcpxml(
             ts_counter += 1
             ts_id = f"ts{ts_counter}"
             is_title = clip.subtitle_style == "title"
-            font_size = "80" if is_title else "48"
+            font_size = "200" if is_title else "150"
 
             title_elem = ET.SubElement(clip_elem, "title", {
                 "ref": title_ref,
@@ -351,11 +370,14 @@ def export_fcpxml(
                 "start": "3600s",
                 "duration": _rs(clip.display_duration),
             })
-            # Position: title 居中偏下，selling_point 底部
-            y_pos = "-200" if is_title else "-430"
+            # Position（Transform Position）— FCP 坐标系
+            # 参考 FCP 导出：key="9999/10085/10086/1/100/101"
+            # title（标题）: y≈-89，画面下方 1/3，大字醒目
+            # selling_point（卖点）: y≈-930，紧贴底部
+            y_pos = "-89" if is_title else "-930"
             ET.SubElement(title_elem, "param", {
                 "name": "Position",
-                "key": "9999/999166631/999166633/2/354/999169573/401",
+                "key": "9999/10085/10086/1/100/101",
                 "value": f"0 {y_pos}",
             })
             text_elem = ET.SubElement(title_elem, "text")
@@ -369,16 +391,35 @@ def export_fcpxml(
                 "bold": "1",
                 "alignment": "center",
             }
-            if is_title:
-                style_attrs["strokeColor"] = "0 0 0 1"
-                style_attrs["strokeWidth"] = "2"
-            else:
+            # selling_point 加阴影增强可读性（title 靠大字号 + 粗体已够醒目）
+            if not is_title:
                 style_attrs["shadowColor"] = "0 0 0 0.75"
                 style_attrs["shadowOffset"] = "3 315"
             ET.SubElement(tsd, "text-style", style_attrs)
 
-        # Advance offset（顺序累加，不减 transition）
+        # 累加 offset（不减 transition 时长，FCP 按 offset 定位）
         current_offset = _snap(current_offset + clip.display_duration)
+
+    # 结尾淡出（最后一个 clip 的 transition_out 为 fade 时）
+    last_clip = timeline.clips[-1] if timeline.clips else None
+    if last_clip and last_clip.transition_out == "fade":
+        fade_dur = _snap(last_clip.transition_duration if last_clip.transition_duration > 0 else 0.5)
+        fade_offset = _snap(current_offset - fade_dur / 2)
+        fade_elem = ET.SubElement(spine, "transition", {
+            "name": "交叉叠化",
+            "offset": _rs(fade_offset),
+            "duration": _rs(fade_dur),
+        })
+        ET.SubElement(fade_elem, "filter-video", {
+            "ref": dissolve_ref,
+            "name": "交叉叠化",
+        })
+
+    # ── 回填 sequence 和 BGM 的 duration（用实际 spine 时长）──
+    spine_duration = current_offset
+    sequence.set("duration", _rs(spine_duration))
+    if bgm_elem is not None:
+        bgm_elem.set("duration", _rs(spine_duration))
 
     # Write
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)

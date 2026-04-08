@@ -12,6 +12,7 @@ from models.timeline import EditingTimeline
 
 from .video_analyzer import analyze_clips
 from .bgm_scanner import scan_bgm_library
+from .font_scanner import scan_font_library
 from .llm_editor import make_editing_decision
 from .subtitle_gen import generate_dual_srt
 from .ffmpeg_assembler import assemble
@@ -26,6 +27,7 @@ def run(
     output_dir: str,
     *,
     bgm_dir: str = "",
+    font_dir: str = "",
     sellpoint_text: str = "",
     motion_results: list[dict] | None = None,
     preferred_llm: str | None = None,
@@ -38,6 +40,7 @@ def run(
         storyboard: Skill 1 输出的分镜数据。
         output_dir: 输出目录。
         bgm_dir: BGM 库目录（按节奏类型分子文件夹）。
+        font_dir: 字体库目录（如 input/fonts/）。
         sellpoint_text: 原始卖点文案（用于字幕提炼）。
         motion_results: Skill 4 输出的运镜结果列表（可选）。
         preferred_llm: LLM 选择。
@@ -67,15 +70,17 @@ def run(
     )
     logger.info(f"  分析完成: {len(clip_analyses)} 个片段")
 
-    logger.info("Skill 5 Step 2/4: BGM 扫描")
+    logger.info("Skill 5 Step 2/4: BGM + 字体扫描")
     bgm_list = scan_bgm_library(bgm_dir) if bgm_dir else []
-    logger.info(f"  BGM 候选: {len(bgm_list)} 首")
+    font_list = scan_font_library(font_dir) if font_dir else []
+    logger.info(f"  BGM 候选: {len(bgm_list)} 首, 字体候选: {len(font_list)} 个")
 
     logger.info("Skill 5 Step 3/4: LLM 剪辑决策")
     timeline = make_editing_decision(
         clip_analyses,
         storyboard,
         bgm_list,
+        font_list=font_list,
         sellpoint_text=sellpoint_text,
         preferred_llm=preferred_llm,
         preferred_route=preferred_route,

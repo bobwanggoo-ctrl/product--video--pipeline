@@ -168,12 +168,14 @@ def _build_transitions(timeline: EditingTimeline) -> list[dict]:
 
         # 使用当前 clip 的 transition_out 作为两者之间的转场
         t_type = curr.transition_out
+        t_dur = curr.transition_duration
         if t_type == "cut" and next_clip.transition_in != "cut":
             t_type = next_clip.transition_in
+            t_dur = next_clip.transition_duration  # 回退时用 next 的时长
 
         transitions.append({
             "type": t_type,
-            "duration": curr.transition_duration if t_type != "cut" else 0.0,
+            "duration": t_dur if t_type != "cut" else 0.0,
         })
     return transitions
 

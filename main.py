@@ -97,6 +97,7 @@ def _resume_pipeline(checkpoint_path: Path):
         "sellpoint_text": sellpoint_text,
         "reference_image_dir": "",  # Not needed for resume (frames already generated)
         "bgm_dir": str(settings.MUSIC_DIR) if settings.MUSIC_DIR.exists() else "",
+        "font_dir": str(settings.FONTS_DIR) if settings.FONTS_DIR.exists() else "",
     }
 
     orchestrator = PipelineOrchestrator(state)
@@ -180,6 +181,7 @@ def main():
         "sellpoint_text": sellpoint_text,
         "reference_image_dir": str(input_dir),
         "bgm_dir": str(settings.MUSIC_DIR) if settings.MUSIC_DIR.exists() else "",
+        "font_dir": str(settings.FONTS_DIR) if settings.FONTS_DIR.exists() else "",
     }
 
     # 4. Run

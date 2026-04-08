@@ -116,6 +116,9 @@ def concat_with_xfade(
         t_type = t.get("type", "cut")
         t_dur = float(t.get("duration", 0.4)) if t_type != "cut" else 0.05
         # cut 用 0.05s 极短 fade 模拟（0.001 会因浮点精度导致 xfade 截断）
+        # 兜底：非 cut 转场的 duration 不能为 0（否则 xfade 会截断视频）
+        if t_type != "cut" and t_dur < 0.05:
+            t_dur = 0.4
 
         xfade_offset = composed_duration - t_dur
 
