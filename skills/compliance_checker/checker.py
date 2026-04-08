@@ -321,6 +321,26 @@ def _parse_result(
                 severity=level,  # 继承整体 level
             ))
 
+    for item in data.get("Integration_Issues", []):
+        if isinstance(item, dict):
+            cat = item.get("category", "lighting")
+            # 融合问题严重时直接 FAIL
+            sev = ComplianceLevel.FAIL if cat in ("scale", "lighting") and level == ComplianceLevel.FAIL else level
+            issues.append(ComplianceIssue(
+                category=cat,
+                description=item.get("description", ""),
+                severity=sev,
+            ))
+
+    for item in data.get("Logic_Issues", []):
+        if isinstance(item, dict):
+            # 逻辑问题通常是严重的
+            issues.append(ComplianceIssue(
+                category=item.get("category", "usage_logic"),
+                description=item.get("description", ""),
+                severity=level,
+            ))
+
     for item in data.get("Quality_And_Risk_Issues", []):
         if isinstance(item, dict):
             cat = item.get("category", "artifact")
