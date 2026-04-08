@@ -168,7 +168,7 @@ def make_editing_decision(
 
         # 构建 EditingTimeline
         try:
-            timeline = _build_timeline(data, clip_map, bgm_list)
+            timeline = _build_timeline(data, clip_map, bgm_list, layout_hints=layout_hints)
         except ValueError as e:
             last_err = e
             if attempt <= max_retries:
@@ -198,6 +198,7 @@ def _build_timeline(
     data: dict,
     clip_map: dict[int, ClipAnalysis],
     bgm_list: list[BgmInfo],
+    layout_hints: dict | None = None,
 ) -> EditingTimeline:
     """从 LLM 输出的 JSON 构建 EditingTimeline，执行时长校验链。"""
     raw_clips = data.get("clips", [])
@@ -246,6 +247,12 @@ def _build_timeline(
 
         display_duration = trimmed_duration / speed_factor
 
+        # 解析字幕位置：优先用 layout_hints，否则按 subtitle_style 默认
+        subtitle_pos = "bottom_center"
+        if layout_hints and shot_id in layout_hints:
+            lh = layout_hints[shot_id]
+            subtitle_pos = getattr(lh, "primary_position", "bottom_center") if hasattr(lh, "primary_position") else lh.get("primary_position", "bottom_center") if isinstance(lh, dict) else "bottom_center"
+
         timeline_clips.append(TimelineClip(
             shot_id=shot_id,
             scene_group_id=source_clip.scene_group_id,
@@ -257,6 +264,7 @@ def _build_timeline(
             subtitle_text=rc.get("subtitle_text", ""),
             subtitle_text_cn=rc.get("subtitle_text_cn", ""),
             subtitle_style=rc.get("subtitle_style", "selling_point"),
+            subtitle_position=subtitle_pos,
             transition_in=rc.get("transition_in", "cut"),
             transition_out=rc.get("transition_out", "cut"),
             transition_duration=float(rc.get("transition_duration", 0.4)),

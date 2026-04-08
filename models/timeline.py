@@ -15,6 +15,7 @@ class TimelineClip(BaseModel):
     subtitle_text: str = ""
     subtitle_text_cn: str = ""   # 中文回译，与英文严格对应
     subtitle_style: str = "selling_point"  # "title" | "selling_point"
+    subtitle_position: str = "bottom_center"  # top_left/top_center/top_right/bottom_left/bottom_center/bottom_right
     transition_in: str = "cut"  # "cut" | "fade" | "dissolve"
     transition_out: str = "cut"
     transition_duration: float = 0.4

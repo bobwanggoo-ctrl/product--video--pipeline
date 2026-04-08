@@ -126,7 +126,7 @@ def assemble(
             output_path=actual_srt_path,
         )
         subtitled_out = str(workdir / "subtitled.mp4")
-        _burn_subtitles(concat_out, actual_srt_path, subtitled_out)
+        _burn_subtitles(concat_out, actual_srt_path, subtitled_out, timeline=timeline)
         current_output = subtitled_out
     else:
         if srt_path:
@@ -194,9 +194,10 @@ def _safe_speed(speed_factor: float, trimmed_duration: float, shot_id: int) -> f
     return speed
 
 
-def _burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
+def _burn_subtitles(video_path: str, srt_path: str, output_path: str, *, timeline: EditingTimeline | None = None) -> None:
     """用 ffmpeg drawtext 滤镜逐条烧录 SRT 字幕到视频。
 
+    根据 timeline 中每个 clip 的 subtitle_style 和 subtitle_position 定位字幕。
     使用 filter_script 文件避免 shell 转义问题。
     """
     entries = _parse_srt(srt_path)
@@ -204,9 +205,19 @@ def _burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
         run_ffmpeg(["-i", video_path, "-c", "copy", output_path])
         return
 
+    # 构建 clip 字幕元数据查找表（按字幕序号顺序）
+    clip_subtitle_info = []
+    if timeline:
+        for clip in timeline.clips:
+            if clip.subtitle_text:
+                clip_subtitle_info.append({
+                    "style": clip.subtitle_style,
+                    "position": clip.subtitle_position,
+                })
+
     # 构建 drawtext filter chain，写入 filter script 文件
     filters = []
-    for entry in entries:
+    for i, entry in enumerate(entries):
         # drawtext 特殊字符转义：
         # \ → \\, ' → \u2019, : → \:, % → %%, ; → \;
         # 另外 filter_script 模式中还需转义 , → \,（逗号分隔滤镜）
@@ -226,11 +237,19 @@ def _burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
         end = entry["end"]
         fontfile_escaped = SUBTITLE_FONT.replace(":", "\\:").replace(" ", "\\ ")
 
+        # 根据 subtitle_style 和 subtitle_position 决定字号和位置
+        info = clip_subtitle_info[i] if i < len(clip_subtitle_info) else {}
+        style = info.get("style", "selling_point")
+        position = info.get("position", "bottom_center")
+
+        fontsize = 52 if style == "title" else 40
+        x_expr, y_expr = _get_drawtext_position(position, style)
+
         filters.append(
             f"drawtext=text='{text}'"
             f":fontfile='{fontfile_escaped}'"
-            f":fontsize=40:fontcolor=white:borderw=3:bordercolor=black"
-            f":x=(w-text_w)/2:y=h-th-60"
+            f":fontsize={fontsize}:fontcolor=white:borderw=3:bordercolor=black"
+            f":x={x_expr}:y={y_expr}"
             f":enable='between(t,{start:.3f},{end:.3f})'"
         )
 
@@ -247,6 +266,34 @@ def _burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
         "-c:a", "copy",
         output_path,
     ])
+
+
+def _get_drawtext_position(position: str, style: str) -> tuple[str, str]:
+    """根据 subtitle_position 和 subtitle_style 返回 drawtext 的 x/y 表达式。
+
+    position: top_left / top_center / top_right / bottom_left / bottom_center / bottom_right
+    style: title（大字，画面下1/3） / selling_point（小字，紧贴底部）
+    """
+    # title 样式放画面下 1/3（y ≈ h*0.65），selling_point 紧贴底部
+    if style == "title":
+        y_map = {
+            "top_left": "th+40", "top_center": "th+40", "top_right": "th+40",
+            "bottom_left": "h*2/3-th", "bottom_center": "h*2/3-th", "bottom_right": "h*2/3-th",
+        }
+    else:
+        y_map = {
+            "top_left": "th+20", "top_center": "th+20", "top_right": "th+20",
+            "bottom_left": "h-th-60", "bottom_center": "h-th-60", "bottom_right": "h-th-60",
+        }
+
+    x_map = {
+        "top_left": "20", "top_center": "(w-text_w)/2", "top_right": "w-text_w-20",
+        "bottom_left": "20", "bottom_center": "(w-text_w)/2", "bottom_right": "w-text_w-20",
+    }
+
+    x_expr = x_map.get(position, "(w-text_w)/2")
+    y_expr = y_map.get(position, "h-th-60")
+    return x_expr, y_expr
 
 
 def _parse_srt(srt_path: str) -> list[dict]:

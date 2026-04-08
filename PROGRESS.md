@@ -51,12 +51,14 @@
 | 1 | 项目骨架搭建 | ✅ 完成 | 目录结构、配置、数据模型、工具函数、流水线编排器 |
 | 2 | 技能1: 卖点→分镜 | ✅ 完成 | 迁移优化转换器、拆分规则、添加运动提示、验证器、Type A/B 测试通过 |
 | 3 | 技能3: 合规性检查 | ✅ 完成 | Gemini Vision 全品类合规检查 + 排版建议 + Error_Keywords 闭环 |
-| 4 | 技能2: 分镜→画面帧 | ⬚ 待开发 | AI导航 图像生成 (GROUP_ID=3) + 三层提示词控制 |
-| 5 | 技能4: 画面帧→视频 | 🔧 运镜规划器完成 | 场景感知运镜选择 + 三层结构，Kling API 客户端已完成，待接入编排器 |
+| 4 | 技能2: 分镜→画面帧 | ✅ 完成 | AI导航 图像生成 (GROUP_ID=3) + 批量提交/轮询 + 参考图上传 |
+| 5 | 技能4: 画面帧→视频 | ✅ 完成 | 场景感知运镜选择 + 三层结构 + Kling API 客户端 + 编排器集成 + 分批/补拍 |
 | 6 | 流水线编排器 | ✅ 完成 | 串联所有技能、半自动模式、选材逻辑、Skill 3 集成、checkpoint 恢复 |
 | 7 | 技能5: 自动剪辑 | ✅ 完成 | Module A(分析+决策) + Module B(组装+导出) + FCPXML 转场/字幕/BGM + 字体扫描 + 排版建议集成 |
 | 8 | API 配置与统一 | ✅ 完成 | 清理废弃 API，统一 LLM 路由 (AI导航优先 + tu-zi备选)，Kling 客户端 |
-| 9 | 端到端测试与优化 | ⬚ 待开发 | 全流水线测试、错误处理、用户体验打磨 |
+| 9 | 端到端测试 | ✅ 完成 | 6 个测试文件 (1538 行)，全流水线 + checkpoint 恢复 + Skill 5 专项 + Trace 系统 |
+| 10 | Claude Code Skills | ✅ 完成 | 6 个 Skill（Skill 1-5 + 全流程编排）+ symlink 规则同步 |
+| 11 | 字幕定位统一 | ✅ 完成 | MP4 drawtext + FCPXML Title 统一接入 layout_hints (subtitle_position) |
 
 ### 技能5 详细进度
 
@@ -81,7 +83,7 @@
 | 3 | checker.py 核心逻辑（参考图压缩/缓存、Vision 调用、并发批量） | ✅ 完成 |
 | 4 | orchestrator 集成（实调、传参、结果展示） | ✅ 完成 |
 | 5 | Skill 5 排版建议传递链路 | ✅ 完成 |
-| 6 | Error_Keywords → Skill 2 negative prompt 闭环 | ⬚ 待接入（Skill 2 消费端） |
+| 6 | Error_Keywords → Skill 2 negative prompt 闭环 | ⬚ 待接入（Skill 2 消费端，~30行） |
 
 ### API 配置状态
 
@@ -105,12 +107,11 @@
 
 | 优先级 | 任务 | 说明 |
 |--------|------|------|
-| P0 | 全流程 E2E 联调 | 用真实输入跑完 Skill 1→2→3→4→5 全链路，验证各步骤串联 |
-| P1 | Error_Keywords 闭环 | Skill 3 的 FAIL/WARN 关键词回传 Skill 2 作为 negative prompt 重新生图 |
-| P1 | 侵权检测增强 | 当前 LLM 初筛，后续可接 Google Cloud Vision Logo Detection |
-| P2 | FCP Title 模板集成 | input/fcp_titles/ 已有 3 套模板包，可丰富 FCPXML 字幕样式 |
+| P1 | Error_Keywords 闭环 | Skill 3 的 FAIL/WARN 关键词回传 Skill 2 作为 negative prompt 重新生图（~30行） |
+| P1 | 全自动模式 UI 暴露 | main.py 加模式选择，代码层已支持（~5行） |
 | P2 | Amazon 链接输入 | 自动抓取商品信息 + 图片作为输入源 |
-| P3 | 全自动模式 (Mode A) | 当前半自动逐步确认，后续支持一键全自动 |
+| P2 | FCP Title 模板集成 | input/fcp_titles/ 已有 3 套模板包，可丰富 FCPXML 字幕样式 |
+| P3 | 侵权检测增强 | 当前 LLM 初筛，后续可接 Google Cloud Vision Logo Detection |
 
 ## 架构 / Architecture
 

@@ -355,7 +355,7 @@ def export_fcpxml(
                 "audioRole": "dialogue",
             })
 
-        # Title attached to clip — 按 subtitle_style 区分样式
+        # Title attached to clip — 按 subtitle_style + subtitle_position 区分样式和位置
         if clip.subtitle_text:
             ts_counter += 1
             ts_id = f"ts{ts_counter}"
@@ -371,25 +371,26 @@ def export_fcpxml(
                 "duration": _rs(clip.display_duration),
             })
             # Position（Transform Position）— FCP 坐标系
-            # 参考 FCP 导出：key="9999/10085/10086/1/100/101"
-            # title（标题）: y≈-89，画面下方 1/3，大字醒目
-            # selling_point（卖点）: y≈-930，紧贴底部
-            y_pos = "-89" if is_title else "-930"
+            # FCP 1920x1080 画布中心为 (0,0)，Y 轴向上为正
+            # 根据 subtitle_position + subtitle_style 确定坐标
+            x_pos, y_pos = _get_fcp_position(clip.subtitle_position, clip.subtitle_style)
             ET.SubElement(title_elem, "param", {
                 "name": "Position",
                 "key": "9999/10085/10086/1/100/101",
-                "value": f"0 {y_pos}",
+                "value": f"{x_pos} {y_pos}",
             })
             text_elem = ET.SubElement(title_elem, "text")
             ts_node = ET.SubElement(text_elem, "text-style", ref=ts_id)
             ts_node.text = clip.subtitle_text
             tsd = ET.SubElement(title_elem, "text-style-def", id=ts_id)
+            # 对齐方式跟随 position 的水平分量
+            alignment = "left" if "left" in clip.subtitle_position else "right" if "right" in clip.subtitle_position else "center"
             style_attrs = {
                 "font": "Helvetica",
                 "fontSize": font_size,
                 "fontColor": "1 1 1 1",
                 "bold": "1",
-                "alignment": "center",
+                "alignment": alignment,
             }
             # selling_point 加阴影增强可读性（title 靠大字号 + 粗体已够醒目）
             if not is_title:
@@ -445,6 +446,36 @@ def _get_fcp_transition_name(transition_type: str) -> str:
         "cut": "Cut",
     }
     return mapping.get(transition_type, "Cross Dissolve")
+
+
+def _get_fcp_position(position: str, style: str) -> tuple[str, str]:
+    """根据 subtitle_position 和 subtitle_style 返回 FCP Position 坐标。
+
+    FCP 坐标系：1920x1080 画布中心 (0,0)，Y 轴向上为正。
+    X 范围 ≈ -960~960，Y 范围 ≈ -540~540。
+
+    title 样式放画面下 1/3（y≈-89），selling_point 紧贴底部（y≈-930）。
+    """
+    # Y 坐标：style 决定垂直层级
+    if style == "title":
+        y_top, y_bottom = "400", "-89"
+    else:
+        y_top, y_bottom = "430", "-930"
+
+    y_map = {
+        "top_left": y_top, "top_center": y_top, "top_right": y_top,
+        "bottom_left": y_bottom, "bottom_center": y_bottom, "bottom_right": y_bottom,
+    }
+
+    # X 坐标：position 决定水平位置
+    x_map = {
+        "top_left": "-600", "top_center": "0", "top_right": "600",
+        "bottom_left": "-600", "bottom_center": "0", "bottom_right": "600",
+    }
+
+    x_pos = x_map.get(position, "0")
+    y_pos = y_map.get(position, y_bottom)
+    return x_pos, y_pos
 
 
 def _make_element(tag: str, attribs: dict) -> ET.Element:
