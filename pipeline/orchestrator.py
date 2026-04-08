@@ -202,14 +202,17 @@ class PipelineOrchestrator:
         )
         return result
 
-    # ── Skill 3（暂跳过）────────────────────────────────
+    # ── Skill 3 ────────────────────────────────────────
 
     def _run_compliance_check(self, input_data: dict) -> dict:
-        """Skill 3: 合规检查（暂未实现，跳过）。"""
-        logger.info("[Pipeline] 合规检查暂跳过，所有帧视为合规通过")
-        step_state = self.state.steps[PipelineStep.COMPLIANCE_CHECK.value]
-        step_state.status = StepStatus.SKIPPED
-        return {"compliance_results": None, "skipped": True}
+        """Skill 3: 合规检查。"""
+        from skills.compliance_checker import run as compliance_run
+
+        return compliance_run(
+            storyboard=input_data["storyboard"],
+            frame_paths=input_data.get("frame_paths", {}),
+            reference_image_dir=input_data.get("reference_image_dir", ""),
+        )
 
     # ── 选材 ─────────────────────────────────────────
 
@@ -351,6 +354,7 @@ class PipelineOrchestrator:
             font_dir=input_data.get("font_dir", ""),
             sellpoint_text=input_data.get("sellpoint_text", ""),
             motion_results=input_data.get("motion_results"),
+            layout_hints=input_data.get("layout_hints"),
             preferred_llm=input_data.get("preferred_llm"),
             preferred_route=input_data.get("preferred_route"),
         )
@@ -441,6 +445,7 @@ class PipelineOrchestrator:
             return {
                 "storyboard": out("sellpoint_to_storyboard").get("storyboard"),
                 "frame_paths": out("storyboard_to_frame").get("frame_paths", {}),
+                "reference_image_dir": ini.get("reference_image_dir", ""),
             }
 
         if step == PipelineStep.FRAME_SELECTION:
@@ -468,6 +473,7 @@ class PipelineOrchestrator:
                 "font_dir": ini.get("font_dir", ""),
                 "sellpoint_text": ini.get("sellpoint_text", ""),
                 "motion_results": out("frame_to_video").get("motion_results"),
+                "layout_hints": out("compliance_check").get("layout_hints"),
             }
 
         return {}
@@ -515,6 +521,22 @@ class PipelineOrchestrator:
             fail = result.get("failed_shots", [])
             print(f"  成功: {len(fp)} | 失败: {len(fail)}")
             print(f"  输出: {self._run_dirs['frames']}")
+
+        elif step == PipelineStep.COMPLIANCE_CHECK:
+            cr_list = result.get("compliance_results") or []
+            if cr_list:
+                from models.compliance import ComplianceLevel
+                pass_n = sum(1 for cr in cr_list if cr.level == ComplianceLevel.PASS)
+                warn_n = sum(1 for cr in cr_list if cr.level == ComplianceLevel.WARN)
+                fail_n = sum(1 for cr in cr_list if cr.level == ComplianceLevel.FAIL)
+                print(f"  PASS: {pass_n} | WARN: {warn_n} | FAIL: {fail_n}")
+                for cr in cr_list:
+                    if cr.level != ComplianceLevel.PASS:
+                        kw = ", ".join(cr.error_keywords) if cr.error_keywords else ""
+                        kw_str = f" → keywords: [{kw}]" if kw else ""
+                        print(f"    shot_{cr.shot_id:02d} [{cr.level.value}] {cr.summary}{kw_str}")
+            elif result.get("skipped"):
+                print(f"  已跳过")
 
         elif step == PipelineStep.FRAME_SELECTION:
             plan = result.get("plan")

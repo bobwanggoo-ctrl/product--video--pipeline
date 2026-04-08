@@ -47,6 +47,7 @@ def build_user_message(
     bgm_list: list[BgmInfo],
     sellpoint_text: str = "",
     font_list: list[FontInfo] | None = None,
+    layout_hints: dict | None = None,
 ) -> str:
     """构建发给 LLM 的 user message。"""
     # 片段信息
@@ -58,10 +59,15 @@ def build_user_message(
         desc = f" 画面:{c.scene_description}" if c.scene_description else ""
         # prompt_cn 包含模特姿态、镜头角度等视觉细节，帮助字幕匹配实际画面
         visual = f" 画面描述:{c.prompt_cn[:80]}" if c.prompt_cn else ""
+        # 排版建议（来自 Skill 3 合规检查）
+        layout = layout_hints.get(c.shot_id) if layout_hints else None
+        layout_str = ""
+        if layout:
+            layout_str = f" | 排版:{layout.primary_position}(避开{layout.avoid_zone})"
         clip_info.append(
             f"  Shot {c.shot_id} | {c.shot_type:6s} | {c.duration:.1f}s | "
             f"{status} | {quality}{issues}{desc}{visual} | "
-            f"目的: {c.purpose} | 运镜: {c.motion_prompt[:50]}"
+            f"目的: {c.purpose} | 运镜: {c.motion_prompt[:50]}{layout_str}"
         )
 
     # BGM 列表
@@ -107,6 +113,7 @@ def make_editing_decision(
     bgm_list: list[BgmInfo],
     font_list: list[FontInfo] | None = None,
     sellpoint_text: str = "",
+    layout_hints: dict | None = None,
     preferred_llm: Optional[str] = None,
     preferred_route: Optional[str] = None,
     max_retries: int = 2,
@@ -119,6 +126,7 @@ def make_editing_decision(
         bgm_list: bgm_scanner 输出的 BGM 列表。
         font_list: font_scanner 输出的字体列表（可选）。
         sellpoint_text: 原始卖点文案（用于字幕提炼）。
+        layout_hints: Skill 3 输出的排版建议（可选）。
         preferred_llm: LLM 选择。
         preferred_route: Gemini 路由选择。
         max_retries: JSON 解析失败时重试次数。
@@ -127,7 +135,7 @@ def make_editing_decision(
         校验通过的 EditingTimeline。
     """
     system_prompt = load_rules()
-    user_message = build_user_message(clips, storyboard, bgm_list, sellpoint_text, font_list)
+    user_message = build_user_message(clips, storyboard, bgm_list, sellpoint_text, font_list, layout_hints)
 
     # 构建 clip 查找表（用于校验时获取原始时长）
     clip_map: dict[int, ClipAnalysis] = {c.shot_id: c for c in clips}

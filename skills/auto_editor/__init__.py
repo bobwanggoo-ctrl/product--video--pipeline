@@ -30,6 +30,7 @@ def run(
     font_dir: str = "",
     sellpoint_text: str = "",
     motion_results: list[dict] | None = None,
+    layout_hints: dict | None = None,
     preferred_llm: str | None = None,
     preferred_route: str | None = None,
 ) -> dict:
@@ -82,6 +83,7 @@ def run(
         bgm_list,
         font_list=font_list,
         sellpoint_text=sellpoint_text,
+        layout_hints=layout_hints,
         preferred_llm=preferred_llm,
         preferred_route=preferred_route,
     )
