@@ -608,17 +608,29 @@ def _serialize_output(step_name: str, output_data: Any) -> Any:
         # 跳过 trace 数据（不存入 checkpoint）
         if k.startswith("_"):
             continue
-        if hasattr(v, "model_dump"):
-            result[k] = {"__pydantic__": True, "__type__": type(v).__name__, "data": v.model_dump()}
-        elif hasattr(v, "__dataclass_fields__"):
-            import dataclasses
-            result[k] = {"__dataclass__": True, "__type__": type(v).__name__, "data": dataclasses.asdict(v)}
-        elif isinstance(v, dict):
-            # frame_paths/video_paths: convert int keys to str for JSON
-            result[k] = {str(kk): vv for kk, vv in v.items()}
-        else:
-            result[k] = v
+        result[k] = _serialize_value(v)
     return result
+
+
+def _serialize_value(v: Any) -> Any:
+    """递归序列化单个值：Pydantic → dict, list → 递归, dict → 递归。"""
+    if v is None:
+        return None
+    if hasattr(v, "model_dump"):
+        return {"__pydantic__": True, "__type__": type(v).__name__, "data": v.model_dump()}
+    if hasattr(v, "__dataclass_fields__"):
+        import dataclasses
+        return {"__dataclass__": True, "__type__": type(v).__name__, "data": dataclasses.asdict(v)}
+    if isinstance(v, list):
+        return [_serialize_value(item) for item in v]
+    if isinstance(v, dict):
+        return {str(kk): _serialize_value(vv) for kk, vv in v.items()}
+    if isinstance(v, (str, int, float, bool)):
+        return v
+    # Enum 等
+    if hasattr(v, "value"):
+        return v.value
+    return str(v)
 
 
 def _deserialize_output(step_name: str, output_data: Any) -> Any:
@@ -631,25 +643,37 @@ def _deserialize_output(step_name: str, output_data: Any) -> Any:
 
     result = {}
     for k, v in output_data.items():
-        if isinstance(v, dict) and v.get("__pydantic__"):
-            type_name = v["__type__"]
-            data = v["data"]
-            if type_name == "Storyboard":
-                from models.storyboard import Storyboard
-                result[k] = Storyboard.model_validate(data)
-            else:
-                result[k] = data
-        elif isinstance(v, dict) and v.get("__dataclass__"):
-            type_name = v["__type__"]
-            data = v["data"]
-            if type_name == "SelectionPlan":
-                from pipeline.frame_selector import SelectionPlan
-                result[k] = SelectionPlan(**data)
-            else:
-                result[k] = data
-        elif isinstance(v, dict) and k in ("frame_paths", "video_paths"):
-            # Restore int keys
-            result[k] = {int(kk): vv for kk, vv in v.items()}
-        else:
-            result[k] = v
+        result[k] = _deserialize_value(k, v)
     return result
+
+
+# Pydantic 类型注册表（用于反序列化）
+_PYDANTIC_REGISTRY = {
+    "Storyboard": lambda d: __import__("models.storyboard", fromlist=["Storyboard"]).Storyboard.model_validate(d),
+    "ComplianceResult": lambda d: __import__("models.compliance", fromlist=["ComplianceResult"]).ComplianceResult.model_validate(d),
+    "LayoutHint": lambda d: __import__("models.compliance", fromlist=["LayoutHint"]).LayoutHint.model_validate(d),
+}
+
+_DATACLASS_REGISTRY = {
+    "SelectionPlan": lambda d: __import__("pipeline.frame_selector", fromlist=["SelectionPlan"]).SelectionPlan(**d),
+}
+
+
+def _deserialize_value(key: str, v: Any) -> Any:
+    """递归反序列化单个值。"""
+    if isinstance(v, dict) and v.get("__pydantic__"):
+        type_name = v["__type__"]
+        data = v["data"]
+        factory = _PYDANTIC_REGISTRY.get(type_name)
+        return factory(data) if factory else data
+    if isinstance(v, dict) and v.get("__dataclass__"):
+        type_name = v["__type__"]
+        data = v["data"]
+        factory = _DATACLASS_REGISTRY.get(type_name)
+        return factory(data) if factory else data
+    if isinstance(v, list):
+        return [_deserialize_value(key, item) for item in v]
+    if isinstance(v, dict) and key in ("frame_paths", "video_paths", "layout_hints"):
+        # Restore int keys
+        return {int(kk): _deserialize_value(key, vv) for kk, vv in v.items()}
+    return v
