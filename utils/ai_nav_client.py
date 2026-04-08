@@ -118,7 +118,7 @@ class AiNavClient:
         aspect_ratio: str = "1:1",
         image_count: int = 1,
     ) -> str:
-        """创建异步生图任务，返回任务 ID。
+        """创建异步生图任务（GROUP_ID=3），返回任务 ID。
 
         Args:
             image_urls: 图片 URL 列表（上传后的 key 或完整 URL）。
@@ -143,7 +143,56 @@ class AiNavClient:
         }
 
         logger.info(f"[AiNav] 创建任务: prompt={prompt[:50]}... images={len(image_urls)}")
+        return self._submit_task(url, payload)
 
+    def create_llm_task(
+        self,
+        system_prompt: str,
+        user_message: str,
+        *,
+        image_urls: list[str] | None = None,
+    ) -> str:
+        """创建异步 LLM 任务（GROUP_ID=13），使用 messages 格式。
+
+        Args:
+            system_prompt: 系统提示词。
+            user_message: 用户消息（纯文本）。
+            image_urls: 图片 URL/base64 列表（Vision 模式，可选）。
+
+        Returns:
+            任务 ID（字符串）。
+        """
+        url = f"{self.base_url}/web/ai/invoke/tasks"
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+
+        if image_urls:
+            # Vision 模式：user content 是数组，包含文本 + 图片
+            content_parts = [{"type": "text", "text": user_message}]
+            for img_url in image_urls:
+                content_parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": img_url},
+                })
+            messages.append({"role": "user", "content": content_parts})
+        else:
+            messages.append({"role": "user", "content": user_message})
+
+        payload = {
+            "appId": self.app_id,
+            "groupId": self.group_id,
+            "params": {
+                "messages": messages,
+            },
+        }
+
+        logger.info(f"[AiNav] 创建 LLM 任务: user={user_message[:50]}... images={len(image_urls or [])}")
+        return self._submit_task(url, payload)
+
+    def _submit_task(self, url: str, payload: dict) -> str:
+        """提交任务到 AI导航，解析返回的 task_id。"""
         resp = requests.post(
             url,
             headers={**self._headers, "Content-Type": "application/json"},

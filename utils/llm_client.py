@@ -74,23 +74,19 @@ class LLMClient:
     ) -> str:
         """Call multimodal LLM with images (for compliance checking).
 
-        走 AI导航 GROUP_ID=13 (Gemini-3-flash)，异步任务模式。
+        走 AI导航 GROUP_ID=13 (Gemini-3-flash)，异步任务模式，messages 格式。
         """
         from utils.ai_nav_client import AiNavClient
 
         client = AiNavClient(purpose="llm")
 
-        # AI导航需要图片 URL，base64 需要先上传
-        # 如果传入的是 base64，先通过 data URI 传递（取决于 AI导航支持）
-        # 否则先上传图片获取 URL
-        image_urls = []
-        for img_b64 in image_base64_list:
-            # 尝试作为 data URI
-            image_urls.append(f"data:image/png;base64,{img_b64}")
+        # base64 → data URI
+        image_urls = [f"data:image/png;base64,{img_b64}" for img_b64 in image_base64_list]
 
-        task_id = client.create_task(
+        task_id = client.create_llm_task(
+            system_prompt="",
+            user_message=prompt,
             image_urls=image_urls,
-            prompt=prompt,
         )
         result = client.wait_for_task(task_id, timeout=120.0)
 
@@ -105,20 +101,17 @@ class LLMClient:
         self, system_prompt: str, user_message: str,
         temperature: float, max_tokens: int, json_mode: bool,
     ) -> str:
-        """Call Gemini-3-flash via AI导航 GROUP_ID=13 异步任务。"""
+        """Call Gemini-3-flash via AI导航 GROUP_ID=13 异步任务，messages 格式。"""
         from utils.ai_nav_client import AiNavClient
 
         client = AiNavClient(purpose="llm")
 
-        # 合并 system + user 为一条 prompt
-        full_prompt = f"{system_prompt}\n\n---\n\n{user_message}"
-
         started_at = time.perf_counter()
         logger.info("[LLM][START][AiNav] Gemini-3-flash via AI导航")
 
-        task_id = client.create_task(
-            image_urls=[],
-            prompt=full_prompt,
+        task_id = client.create_llm_task(
+            system_prompt=system_prompt,
+            user_message=user_message,
         )
         result = client.wait_for_task(task_id, timeout=180.0)
 
