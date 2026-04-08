@@ -120,7 +120,26 @@ def generate_frames(
         + (f" (失败: {failed_shots})" if failed_shots else "")
     )
 
-    return {"frame_paths": frame_paths, "failed_shots": failed_shots}
+    # trace: per-shot prompt + 参考图信息
+    per_shot_prompts = {}
+    for shot in shots:
+        per_shot_prompts[shot.shot_id] = shot.prompt_cn
+
+    return {
+        "frame_paths": frame_paths,
+        "failed_shots": failed_shots,
+        "_trace": {
+            "per_shot_prompts": per_shot_prompts,
+            "meta": {
+                "reference_images": len(ref_keys),
+                "total_shots": len(shots),
+                "success": len(frame_paths),
+                "failed": len(failed_shots),
+                "failed_ids": failed_shots,
+                "frame_paths": {k: str(v) for k, v in frame_paths.items()},
+            },
+        },
+    }
 
 
 def _upload_reference_images(client: AiNavClient, ref_dir: str) -> list[str]:

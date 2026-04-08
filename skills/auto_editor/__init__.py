@@ -119,7 +119,7 @@ def run(
     logger.info("Skill 5 全部完成")
     logger.info("=" * 60)
 
-    return {
+    result = {
         "mp4": mp4_path,
         "srt_en": srt_paths["en"],
         "srt_cn": srt_paths["cn"],
@@ -127,3 +127,10 @@ def run(
         "fcpxml": fcpxml_path,
         "timeline": timeline,
     }
+
+    # 透传 LLM 剪辑决策的 trace
+    if hasattr(timeline, "_trace"):
+        result["_trace"] = timeline._trace
+        result["_trace"]["timeline"] = timeline.model_dump()
+
+    return result

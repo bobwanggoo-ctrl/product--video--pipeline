@@ -14,6 +14,7 @@ INPUT_DIR = ROOT_DIR / "input"
 OUTPUT_DIR = ROOT_DIR / "output"
 REFERENCE_IMAGES_DIR = INPUT_DIR / "reference_images"
 MUSIC_DIR = INPUT_DIR / "music"
+FONTS_DIR = INPUT_DIR / "fonts"
 STORYBOARDS_DIR = OUTPUT_DIR / "storyboards"
 FRAMES_DIR = OUTPUT_DIR / "frames"
 VIDEOS_DIR = OUTPUT_DIR / "videos"
@@ -64,9 +65,10 @@ def create_run_dirs(task_id: str) -> dict[str, Path]:
         "frames": root / "frames",
         "videos": root / "videos",
         "final": root / "final",
+        "trace": root / "trace",
         "checkpoint": root / "checkpoint.json",
     }
     # Create directories (not file paths)
-    for key in ("root", "frames", "videos", "final"):
+    for key in ("root", "frames", "videos", "final", "trace"):
         dirs[key].mkdir(parents=True, exist_ok=True)
     return dirs

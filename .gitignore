@@ -4,3 +4,5 @@ __pycache__/
 .venv/
 output/
 *.log
+.DS_Store
+input/

@@ -65,7 +65,7 @@ def run(
     shots = _get_all_shots(storyboard)
     logger.info(f"[Skill3] 开始合规检查: {len(shots)} shots, {len(ref_images_b64)} 张参考图")
 
-    results, layout_hints, error_keywords = _batch_check(
+    results, layout_hints, error_keywords, per_shot_trace = _batch_check(
         shots, frame_paths, ref_images_b64, reference_image_dir,
     )
 
@@ -85,6 +85,19 @@ def run(
         "layout_hints": {lh.shot_id: lh for lh in layout_hints.values()} if isinstance(layout_hints, dict) else layout_hints,
         "error_keywords": error_keywords,
         "skipped": False,
+        "_trace": {
+            "prompt_template": COMPLIANCE_PROMPT if has_ref else NO_REFERENCE_PROMPT,
+            "per_shot": per_shot_trace,
+            "meta": {
+                "total_shots": len(shots),
+                "checked": len(results),
+                "pass": pass_count,
+                "warn": warn_count,
+                "fail": fail_count,
+                "has_reference": has_ref,
+                "reference_count": len(ref_images_b64),
+            },
+        },
     }
 
 
@@ -156,18 +169,19 @@ def _batch_check(
     ref_images_b64: list[str],
     reference_image_dir: str,
     max_workers: int = MAX_WORKERS,
-) -> tuple[list[ComplianceResult], dict[int, LayoutHint], dict[int, list[str]]]:
-    """并发检查所有 shot。"""
+) -> tuple[list[ComplianceResult], dict[int, LayoutHint], dict[int, list[str]], dict[int, dict]]:
+    """并发检查所有 shot。返回 (results, layout_hints, error_keywords, per_shot_trace)。"""
     results: list[ComplianceResult] = []
     layout_hints: dict[int, LayoutHint] = {}
     error_keywords: dict[int, list[str]] = {}
+    per_shot_trace: dict[int, dict] = {}
 
     # 过滤有帧的 shot
     checkable = [(s, frame_paths[s["shot_id"]]) for s in shots if s["shot_id"] in frame_paths]
 
     if not checkable:
         logger.warning("[Skill3] 无可检查的 shot（frame_paths 为空）")
-        return results, layout_hints, error_keywords
+        return results, layout_hints, error_keywords, per_shot_trace
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {}
@@ -181,12 +195,14 @@ def _batch_check(
         for future in concurrent.futures.as_completed(future_map):
             sid = future_map[future]
             try:
-                cr, lh = future.result(timeout=TIMEOUT_PER_SHOT)
+                cr, lh, trace = future.result(timeout=TIMEOUT_PER_SHOT)
                 results.append(cr)
                 if lh:
                     layout_hints[sid] = lh
                 if cr.error_keywords:
                     error_keywords[sid] = cr.error_keywords
+                if trace:
+                    per_shot_trace[sid] = trace
             except Exception as e:
                 logger.warning(f"[Skill3] shot_{sid:02d} 检查失败: {e}")
                 fp = frame_paths.get(sid, "")
@@ -194,7 +210,7 @@ def _batch_check(
 
     # 按 shot_id 排序
     results.sort(key=lambda r: r.shot_id)
-    return results, layout_hints, error_keywords
+    return results, layout_hints, error_keywords, per_shot_trace
 
 
 # ── 单 shot 检查 ──────────────────────────────────────────
@@ -204,17 +220,18 @@ def _check_single_shot(
     frame_path: str,
     ref_images_b64: list[str],
     reference_image_dir: str,
-) -> tuple[ComplianceResult, LayoutHint | None]:
-    """单 shot 合规检查。"""
+) -> tuple[ComplianceResult, LayoutHint | None, dict]:
+    """单 shot 合规检查。返回 (result, layout_hint, trace_data)。"""
     sid = shot_info["shot_id"]
     logger.info(f"  [Skill3] 检查 shot_{sid:02d}: {Path(frame_path).name}")
+    trace = {}
 
     # 加载生成图
     try:
         gen_b64 = _compress_image(frame_path)
     except Exception as e:
         logger.warning(f"  [Skill3] shot_{sid:02d} 图片加载失败: {e}")
-        return _default_result(sid, frame_path), None
+        return _default_result(sid, frame_path), None, trace
 
     # 构造图片列表：[参考图...] + [生成图]
     all_images = ref_images_b64 + [gen_b64]
@@ -235,29 +252,40 @@ def _check_single_shot(
             shot_type=shot_info.get("type", "Medium"),
         )
 
+    trace["prompt"] = prompt
+
     # 调用 Vision LLM
     try:
         from utils.llm_client import llm_client
         raw = llm_client.call_vision(prompt, all_images)
+        trace["raw_response"] = raw
     except Exception as e:
         logger.warning(f"  [Skill3] shot_{sid:02d} Vision 调用失败: {e}")
-        return _default_result(sid, frame_path), None
+        trace["error"] = str(e)
+        return _default_result(sid, frame_path), None, trace
 
     # 解析结果
     try:
         data = extract_json(raw)
+        trace["parsed"] = data
     except Exception as e:
         logger.warning(f"  [Skill3] shot_{sid:02d} JSON 解析失败: {e}\n  raw: {raw[:200]}")
-        return _default_result(sid, frame_path), None
+        trace["parse_error"] = str(e)
+        return _default_result(sid, frame_path), None, trace
 
     cr = _parse_result(sid, frame_path, reference_image_dir, data)
     lh = _parse_layout_hint(sid, data)
+
+    trace["level"] = cr.level.value
+    trace["score"] = cr.score
+    trace["summary"] = cr.summary
+    trace["error_keywords"] = cr.error_keywords
 
     logger.info(
         f"  [Skill3] shot_{sid:02d} → {cr.level.value} "
         f"(score={cr.score:.1f}) {cr.summary[:60]}"
     )
-    return cr, lh
+    return cr, lh, trace
 
 
 # ── 解析逻辑 ──────────────────────────────────────────────

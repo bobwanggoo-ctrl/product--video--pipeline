@@ -186,7 +186,11 @@ class PipelineOrchestrator:
             preferred_route=input_data.get("preferred_route"),
             output_path=input_data.get("output_path"),
         )
-        return {"storyboard": storyboard}
+        result = {"storyboard": storyboard}
+        # 透传 trace 数据
+        if hasattr(storyboard, "_trace"):
+            result["_trace"] = storyboard._trace
+        return result
 
     # ── Skill 2 ──────────────────────────────────────
 
@@ -601,6 +605,9 @@ def _serialize_output(step_name: str, output_data: Any) -> Any:
 
     result = {}
     for k, v in output_data.items():
+        # 跳过 trace 数据（不存入 checkpoint）
+        if k.startswith("_"):
+            continue
         if hasattr(v, "model_dump"):
             result[k] = {"__pydantic__": True, "__type__": type(v).__name__, "data": v.model_dump()}
         elif hasattr(v, "__dataclass_fields__"):

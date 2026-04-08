@@ -38,7 +38,7 @@ class AiNavClient:
         """初始化客户端。
 
         Args:
-            purpose: "image" (生图/生视频, GROUP_ID=1) 或 "llm" (Gemini LLM, GROUP_ID=13)。
+            purpose: "image" (生图/生视频, GROUP_ID=3) 或 "llm" (Gemini LLM, GROUP_ID=13)。
                      手动传 app_id/group_id 时忽略此参数。
         """
         self.base_url = (base_url or settings.AI_NAV_BASE_URL).rstrip("/")

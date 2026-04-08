@@ -168,6 +168,15 @@ def convert(
             f"[Converter] Done: {len(storyboard.scene_groups)} groups, "
             f"{storyboard.total_shots} shots"
         )
+
+        # 附带 trace 数据（供 TraceLogger 记录）
+        storyboard._trace = {
+            "system_prompt": system_prompt,
+            "user_prompt": user_message,
+            "llm_response": raw,
+            "attempts": attempt,
+        }
+
         return storyboard
 
     raise ValueError(f"Conversion failed: {last_err}")

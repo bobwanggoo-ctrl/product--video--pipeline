@@ -180,6 +180,15 @@ def make_editing_decision(
             f"[Editor] 决策完成: {len(timeline.clips)} 个片段, "
             f"总时长 {timeline.total_duration:.1f}s, BGM: {timeline.bgm_path or '无'}"
         )
+
+        # 附带 trace 数据
+        timeline._trace = {
+            "system_prompt": system_prompt,
+            "user_prompt": user_message,
+            "llm_response": raw,
+            "attempts": attempt,
+        }
+
         return timeline
 
     raise ValueError(f"剪辑决策失败: {last_err}")
