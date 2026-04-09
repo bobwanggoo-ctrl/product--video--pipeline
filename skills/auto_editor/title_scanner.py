@@ -22,8 +22,8 @@ FCP_TITLES_DIR = Path.home() / "Movies" / "Motion Templates.localized" / "Titles
 
 # 模板用途映射：subtitle_style → 模板包偏好
 STYLE_CATEGORY_MAP = {
-    "title": "Social Media Titles",          # 大标题用社交媒体风格
-    "selling_point": "Social Media Titles",   # 卖点字幕也用社交媒体风格
+    "title": "084 SDMAC－PROTMK 炫酷文字遮罩动画",       # 标题用遮罩动画
+    "selling_point": "084 SDMAC－PROTMK 炫酷文字遮罩动画", # 卖点字幕也用遮罩动画
 }
 
 
@@ -34,6 +34,7 @@ class TitleTemplate:
     category: str                # 所属包名（如 "Social Media Titles"）
     moti_path: Path              # .moti 文件的源路径
     preview_path: Path | None    # 预览图路径（large.png）
+    sub_path: str = ""           # category 内的子路径（如 "In/Out Text/100"）
     installed_path: Path | None = None  # 安装后的路径
 
 
@@ -73,11 +74,27 @@ def scan_templates(templates_dir: str = "") -> TitleTemplateLibrary:
 
     for moti in moti_files:
         name = moti.stem
-        # 推断 category：.moti 的上两级目录通常是 category/name
-        # 如 Social Media Titles/Scene 02/Scene 02.moti → category="Social Media Titles"
         parent = moti.parent
-        # 有些模板结构更深（如 084.../In/Out Text/100/100 C.moti），取 third_party 下一级
         category = _infer_category(moti, base)
+
+        # 计算 category 内的子路径（保留完整层级）
+        # 如 base/third_party/084.../In/Out Text/100/100 C.moti
+        # category = "084..."  → sub_path = "In/Out Text/100"
+        sub_path = ""
+        try:
+            rel = moti.relative_to(base)
+            parts = list(rel.parts)
+            # 跳过 "third_party" 和 category 本身
+            if parts and parts[0] == "third_party":
+                parts = parts[1:]
+            if parts and parts[0] == category:
+                parts = parts[1:]
+            # 去掉文件名，剩余的就是子路径
+            if parts:
+                parts = parts[:-1]  # remove filename
+            sub_path = str(Path(*parts)) if parts else ""
+        except ValueError:
+            pass
 
         preview = None
         for img_name in ("large.png", "small.png"):
@@ -91,6 +108,7 @@ def scan_templates(templates_dir: str = "") -> TitleTemplateLibrary:
             category=category,
             moti_path=moti,
             preview_path=preview,
+            sub_path=sub_path,
         )
         lib.templates.append(template)
         lib.categories.setdefault(category, []).append(template)
@@ -116,8 +134,12 @@ def install_templates(lib: TitleTemplateLibrary) -> int:
 
     for template in lib.templates:
         try:
-            # 安装路径: ~/Movies/Motion Templates.localized/Titles.localized/<Category>/<Name>/
-            dest_dir = FCP_TITLES_DIR / template.category / template.name
+            # 安装路径保留完整层级:
+            # ~/Movies/Motion Templates.localized/Titles.localized/<Category>/<sub_path>/
+            if template.sub_path:
+                dest_dir = FCP_TITLES_DIR / template.category / template.sub_path
+            else:
+                dest_dir = FCP_TITLES_DIR / template.category / template.name
             dest_moti = dest_dir / template.moti_path.name
 
             if dest_moti.exists():

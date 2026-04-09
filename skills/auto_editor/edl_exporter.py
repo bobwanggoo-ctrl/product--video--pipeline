@@ -240,12 +240,12 @@ def export_fcpxml(
     })
 
     # 视频素材
-    asset_id_counter = 2  # r1 是 format，从 r2 开始
+    asset_id_counter = [2]  # r1 是 format，从 r2 开始（用 list 使循环内可修改）
     clip_ref_map = {}  # shot_id → asset ref id
     for clip in timeline.clips:
-        ref_id = f"r{asset_id_counter}"
+        ref_id = f"r{asset_id_counter[0]}"
         clip_ref_map[clip.shot_id] = ref_id
-        asset_id_counter += 1
+        asset_id_counter[0] += 1
         asset_elem = ET.SubElement(resources, "asset", {
             "id": ref_id,
             "name": f"Shot {clip.shot_id}",
@@ -262,8 +262,8 @@ def export_fcpxml(
     # BGM 素材
     bgm_ref = None
     if timeline.bgm_path:
-        bgm_ref = f"r{asset_id_counter}"
-        asset_id_counter += 1
+        bgm_ref = f"r{asset_id_counter[0]}"
+        asset_id_counter[0] += 1
         bgm_asset = ET.SubElement(resources, "asset", {
             "id": bgm_ref,
             "name": "BGM",
@@ -278,33 +278,44 @@ def export_fcpxml(
             "src": Path(timeline.bgm_path).resolve().as_uri(),
         })
 
-    # 字幕 effect — Essential Title 作为默认
-    default_title_ref = f"r{asset_id_counter}"
-    asset_id_counter += 1
+    # 字幕 effect — 优先使用自定义 .moti 模板，降级到 Essential Title
+    custom_title_ref = None
+    custom_title_name = None
+    if title_lib and title_lib.templates:
+        from .title_scanner import get_template_for_style, get_fcpxml_uid
+        # 选一个模板注册为 effect（所有字幕共用）
+        tmpl = get_template_for_style(title_lib, "title", 0)
+        if tmpl and tmpl.installed_path:
+            custom_title_ref = f"r{asset_id_counter[0]}"
+            custom_title_name = tmpl.name
+            asset_id_counter[0] += 1
+            # FCP uid 格式: ~/Titles.localized/ + 相对路径
+            fcp_titles_base = Path.home() / "Movies" / "Motion Templates.localized"
+            try:
+                rel_path = tmpl.installed_path.relative_to(fcp_titles_base)
+                uid = f"~/{rel_path}"
+            except ValueError:
+                uid = f"~/{tmpl.installed_path}"
+            src_uri = tmpl.installed_path.resolve().as_uri()
+            ET.SubElement(resources, "effect", {
+                "id": custom_title_ref,
+                "name": custom_title_name,
+                "uid": uid,
+                "src": src_uri,
+            })
+            logger.info(f"[FCPXML] 使用自定义 Title 模板: {custom_title_name} (uid={uid})")
+
+    default_title_ref = f"r{asset_id_counter[0]}"
+    asset_id_counter[0] += 1
     ET.SubElement(resources, "effect", {
         "id": default_title_ref,
         "name": "Essential Title",
         "uid": ".../Titles.localized/Essential Titles.localized/Essential Title.localized/Essential Title.moti",
     })
 
-    # 自定义 Title 模板 effects（如果可用）
-    custom_title_refs: dict[str, str] = {}  # template.name → ref_id
-    if title_lib and title_lib.templates:
-        from .title_scanner import get_template_for_style, get_fcpxml_uid
-        for tmpl in title_lib.templates:
-            if tmpl.name not in custom_title_refs:
-                ref_id = f"r{asset_id_counter}"
-                asset_id_counter += 1
-                ET.SubElement(resources, "effect", {
-                    "id": ref_id,
-                    "name": tmpl.name,
-                    "uid": get_fcpxml_uid(tmpl),
-                })
-                custom_title_refs[tmpl.name] = ref_id
-
     # 转场 effect（FCP 内置 Cross Dissolve — 使用 FxPlug uid）
-    dissolve_ref = f"r{asset_id_counter}"
-    asset_id_counter += 1
+    dissolve_ref = f"r{asset_id_counter[0]}"
+    asset_id_counter[0] += 1
     ET.SubElement(resources, "effect", {
         "id": dissolve_ref,
         "name": "交叉叠化",
@@ -393,49 +404,80 @@ def export_fcpxml(
             ts_counter += 1
             ts_id = f"ts{ts_counter}"
             is_title = clip.subtitle_style == "title"
-            font_size = "200" if is_title else "150"
+            font_size = "150" if is_title else "75"
 
-            # 选择模板：有自定义模板时使用，否则用 Essential Title
-            use_title_ref = default_title_ref
-            use_title_name = "Essential Title"
-            if title_lib and title_lib.templates:
+            # 选择模板: 自定义 .moti 优先，降级 Essential Title
+            use_custom = custom_title_ref is not None
+            use_ref = custom_title_ref if use_custom else default_title_ref
+            use_name = custom_title_name if use_custom else "Essential Title"
+
+            # 自定义模板可以按 clip 轮换不同模板
+            if use_custom and title_lib:
                 tmpl = get_template_for_style(title_lib, clip.subtitle_style, ts_counter - 1)
-                if tmpl and tmpl.name in custom_title_refs:
-                    use_title_ref = custom_title_refs[tmpl.name]
-                    use_title_name = tmpl.name
+                if tmpl and tmpl.installed_path:
+                    # 为每个不同模板注册 effect（如果尚未注册）
+                    if not hasattr(export_fcpxml, '_custom_refs'):
+                        export_fcpxml._custom_refs = {}
+                    if tmpl.name not in export_fcpxml._custom_refs:
+                        fcp_titles_base = Path.home() / "Movies" / "Motion Templates.localized"
+                        try:
+                            rel_path = tmpl.installed_path.relative_to(fcp_titles_base)
+                            uid = f"~/{rel_path}"
+                        except ValueError:
+                            uid = f"~/{tmpl.installed_path}"
+                        new_ref = f"r{asset_id_counter[0]}"
+                        asset_id_counter[0] += 1
+                        ET.SubElement(resources, "effect", {
+                            "id": new_ref,
+                            "name": tmpl.name,
+                            "uid": uid,
+                            "src": tmpl.installed_path.resolve().as_uri(),
+                        })
+                        export_fcpxml._custom_refs[tmpl.name] = new_ref
+                    use_ref = export_fcpxml._custom_refs.get(tmpl.name, use_ref)
+                    use_name = tmpl.name
 
             title_elem = ET.SubElement(clip_elem, "title", {
-                "ref": use_title_ref,
+                "ref": use_ref,
                 "lane": "1",
                 "offset": "0s",
-                "name": use_title_name,
+                "name": use_name,
                 "start": "3600s",
                 "duration": _rs(clip.display_duration),
             })
-            # Position（Transform Position）— FCP 坐标系
-            # FCP 1920x1080 画布中心为 (0,0)，Y 轴向上为正
-            # 根据 subtitle_position + subtitle_style 确定坐标
-            x_pos, y_pos = _get_fcp_position(clip.subtitle_position, clip.subtitle_style)
-            ET.SubElement(title_elem, "param", {
-                "name": "Position",
-                "key": "9999/10085/10086/1/100/101",
-                "value": f"{x_pos} {y_pos}",
-            })
+
+            if use_custom:
+                # 自定义模板参数（参照 FCP 导出格式）
+                x_pos, y_pos = _get_fcp_position(clip.subtitle_position, clip.subtitle_style)
+                ET.SubElement(title_elem, "param", {
+                    "name": "位置",
+                    "key": "9999/2310926/2310927/1/100/101",
+                    "value": f"{x_pos} {y_pos}",
+                })
+            else:
+                # Essential Title 参数
+                x_pos, y_pos = _get_fcp_position(clip.subtitle_position, clip.subtitle_style)
+                ET.SubElement(title_elem, "param", {
+                    "name": "Position",
+                    "key": "9999/10085/10086/1/100/101",
+                    "value": f"{x_pos} {y_pos}",
+                })
+
             text_elem = ET.SubElement(title_elem, "text")
             ts_node = ET.SubElement(text_elem, "text-style", ref=ts_id)
             ts_node.text = clip.subtitle_text
             tsd = ET.SubElement(title_elem, "text-style-def", id=ts_id)
-            # 对齐方式跟随 position 的水平分量
             alignment = "left" if "left" in clip.subtitle_position else "right" if "right" in clip.subtitle_position else "center"
             style_attrs = {
-                "font": "Helvetica",
+                "font": "Impact",
                 "fontSize": font_size,
+                "fontFace": "Regular",
                 "fontColor": "1 1 1 1",
                 "bold": "1",
+                "baseline": "1",
                 "alignment": alignment,
             }
-            # selling_point 加阴影增强可读性（title 靠大字号 + 粗体已够醒目）
-            if not is_title:
+            if not is_title and not use_custom:
                 style_attrs["shadowColor"] = "0 0 0 0.75"
                 style_attrs["shadowOffset"] = "3 315"
             ET.SubElement(tsd, "text-style", style_attrs)
@@ -496,13 +538,13 @@ def _get_fcp_position(position: str, style: str) -> tuple[str, str]:
     FCP 坐标系：1920x1080 画布中心 (0,0)，Y 轴向上为正。
     X 范围 ≈ -960~960，Y 范围 ≈ -540~540。
 
-    title 样式放画面下 1/3（y≈-89），selling_point 紧贴底部（y≈-930）。
+    title 样式放画面下 1/3（y≈-89），selling_point 放画面底部偏上（y≈-300）。
     """
     # Y 坐标：style 决定垂直层级
     if style == "title":
         y_top, y_bottom = "400", "-89"
     else:
-        y_top, y_bottom = "430", "-930"
+        y_top, y_bottom = "430", "-300"
 
     y_map = {
         "top_left": y_top, "top_center": y_top, "top_right": y_top,
