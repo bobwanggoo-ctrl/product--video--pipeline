@@ -28,6 +28,7 @@ def run(
     *,
     bgm_dir: str = "",
     font_dir: str = "",
+    title_templates_dir: str = "",
     sellpoint_text: str = "",
     motion_results: list[dict] | None = None,
     layout_hints: dict | None = None,
@@ -42,6 +43,7 @@ def run(
         output_dir: 输出目录。
         bgm_dir: BGM 库目录（按节奏类型分子文件夹）。
         font_dir: 字体库目录（如 input/fonts/）。
+        title_templates_dir: FCP Title 模板目录（可选，如 input/fcp_titles/）。
         sellpoint_text: 原始卖点文案（用于字幕提炼）。
         motion_results: Skill 4 输出的运镜结果列表（可选）。
         preferred_llm: LLM 选择。
@@ -113,7 +115,7 @@ def run(
     jianying_path = str(out_dir / "draft_content.json")
     fcpxml_path = str(out_dir / "project.fcpxml")
     export_jianying_json(timeline, jianying_path, srt_paths["en"])
-    export_fcpxml(timeline, fcpxml_path, srt_paths["en"])
+    export_fcpxml(timeline, fcpxml_path, srt_paths["en"], title_templates_dir=title_templates_dir)
 
     logger.info("=" * 60)
     logger.info("Skill 5 全部完成")

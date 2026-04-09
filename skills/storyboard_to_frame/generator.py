@@ -31,6 +31,7 @@ def generate_frames(
     aspect_ratio: str = "16:9",
     poll_interval: float = 3.0,
     timeout: float = 180.0,
+    error_keywords: dict[int, list[str]] | None = None,
 ) -> dict:
     """从 storyboard 生成所有 shot 的画面帧。
 
@@ -41,6 +42,8 @@ def generate_frames(
         aspect_ratio: 生图宽高比，默认 16:9。
         poll_interval: 轮询间隔秒数。
         timeout: 单任务超时秒数。
+        error_keywords: Skill 3 输出的 {shot_id: [keyword, ...]}，
+                        拼接到 prompt 末尾作为 negative 约束。
 
     Returns:
         {
@@ -71,10 +74,19 @@ def generate_frames(
     submit_failed: list[int] = []
 
     for shot in shots:
+        # 构造 prompt，拼接 error_keywords 作为 negative 约束
+        prompt = shot.prompt_cn
+        if error_keywords:
+            kw_list = error_keywords.get(shot.shot_id, [])
+            if kw_list:
+                neg = ", ".join(kw_list)
+                prompt = f"{prompt}\n\n[Negative: {neg}]"
+                logger.info(f"  shot_{shot.shot_id:02d} 附加 negative: {neg}")
+
         try:
             task_id = client.create_task(
                 image_urls=ref_keys,
-                prompt=shot.prompt_cn,
+                prompt=prompt,
                 aspect_ratio=aspect_ratio,
                 image_count=1,
             )

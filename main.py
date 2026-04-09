@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Product Video Pipeline - Main Entry Point.
 
-Semi-auto mode: runs each step with user confirmation.
-Usage: python main.py
+Usage:
+    python main.py              # 半自动模式（逐步确认）
+    python main.py --auto       # 全自动模式（无人值守）
 """
 
+import argparse
 import logging
 import sys
 import time
@@ -106,9 +108,16 @@ def _resume_pipeline(checkpoint_path: Path):
 
 def main():
     """Main pipeline entry point."""
+    parser = argparse.ArgumentParser(description="Product Video Pipeline")
+    parser.add_argument("--auto", action="store_true", help="全自动模式（无人值守）")
+    args = parser.parse_args()
+
+    mode = "full_auto" if args.auto else "semi_auto"
+
     settings.LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("\n=== Product Video Pipeline ===\n")
+    print("\n=== Product Video Pipeline ===")
+    print(f"模式: {'全自动' if args.auto else '半自动'}\n")
 
     # 1. Check for unfinished checkpoints
     checkpoints = _find_checkpoints()
@@ -174,7 +183,7 @@ def main():
     # Save sellpoint text
     run_dirs["sellpoint"].write_text(sellpoint_text, encoding="utf-8")
 
-    state = PipelineState(task_id=task_id, mode="semi_auto")
+    state = PipelineState(task_id=task_id, mode=mode)
     orchestrator = PipelineOrchestrator(state)
 
     initial_input = {
@@ -182,6 +191,7 @@ def main():
         "reference_image_dir": str(input_dir),
         "bgm_dir": str(settings.MUSIC_DIR) if settings.MUSIC_DIR.exists() else "",
         "font_dir": str(settings.FONTS_DIR) if settings.FONTS_DIR.exists() else "",
+        "title_templates_dir": str(settings.FCP_TITLES_DIR) if settings.FCP_TITLES_DIR.exists() else "",
     }
 
     # 4. Run

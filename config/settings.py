@@ -15,6 +15,7 @@ OUTPUT_DIR = ROOT_DIR / "output"
 REFERENCE_IMAGES_DIR = INPUT_DIR / "reference_images"
 MUSIC_DIR = INPUT_DIR / "music"
 FONTS_DIR = INPUT_DIR / "fonts"
+FCP_TITLES_DIR = INPUT_DIR / "fcp_titles"
 STORYBOARDS_DIR = OUTPUT_DIR / "storyboards"
 FRAMES_DIR = OUTPUT_DIR / "frames"
 VIDEOS_DIR = OUTPUT_DIR / "videos"
@@ -46,6 +47,9 @@ KLING_MODEL = os.getenv("KLING_MODEL", "kling-v2-5")
 KLING_MODE = os.getenv("KLING_MODE", "std")
 KLING_DURATION = os.getenv("KLING_DURATION", "5")
 KLING_ASPECT_RATIO = os.getenv("KLING_ASPECT_RATIO", "16:9")
+
+# --- Google Cloud Vision API (侵权检测) ---
+GOOGLE_VISION_API_KEY = os.getenv("GOOGLE_VISION_API_KEY", "")
 
 # --- General ---
 HTTPS_PROXY = os.getenv("HTTPS_PROXY", "")

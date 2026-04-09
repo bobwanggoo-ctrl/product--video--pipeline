@@ -189,12 +189,30 @@ def export_fcpxml(
     timeline: EditingTimeline,
     output_path: str,
     srt_path: str = "",
+    title_templates_dir: str = "",
 ) -> str:
     """导出 Final Cut Pro 兼容的 FCPXML 1.11 文件。
 
     格式对照 FCP 自身导出的 .fcpxmld，包含视频轨、字幕 title、BGM。
+
+    Args:
+        title_templates_dir: FCP Title 模板目录。非空时自动扫描并安装模板，
+                             字幕将使用自定义模板替代 Essential Title。
     """
     fcpxml = ET.Element("fcpxml", version="1.11")
+
+    # ── 加载自定义 Title 模板（可选）──
+    title_lib = None
+    if title_templates_dir:
+        try:
+            from .title_scanner import scan_templates, install_templates
+            title_lib = scan_templates(title_templates_dir)
+            if title_lib.templates:
+                install_templates(title_lib)
+                logger.info(f"[FCPXML] 加载了 {len(title_lib.templates)} 个 Title 模板")
+        except Exception as e:
+            logger.warning(f"[FCPXML] Title 模板加载失败，使用 Essential Title: {e}")
+            title_lib = None
 
     fps = int(timeline.fps) if timeline.fps == int(timeline.fps) else timeline.fps
     res_parts = timeline.resolution.split("x")
@@ -260,14 +278,29 @@ def export_fcpxml(
             "src": Path(timeline.bgm_path).resolve().as_uri(),
         })
 
-    # 字幕 effect（FCP 内置 Essential Title）
-    title_ref = f"r{asset_id_counter}"
+    # 字幕 effect — Essential Title 作为默认
+    default_title_ref = f"r{asset_id_counter}"
     asset_id_counter += 1
     ET.SubElement(resources, "effect", {
-        "id": title_ref,
+        "id": default_title_ref,
         "name": "Essential Title",
         "uid": ".../Titles.localized/Essential Titles.localized/Essential Title.localized/Essential Title.moti",
     })
+
+    # 自定义 Title 模板 effects（如果可用）
+    custom_title_refs: dict[str, str] = {}  # template.name → ref_id
+    if title_lib and title_lib.templates:
+        from .title_scanner import get_template_for_style, get_fcpxml_uid
+        for tmpl in title_lib.templates:
+            if tmpl.name not in custom_title_refs:
+                ref_id = f"r{asset_id_counter}"
+                asset_id_counter += 1
+                ET.SubElement(resources, "effect", {
+                    "id": ref_id,
+                    "name": tmpl.name,
+                    "uid": get_fcpxml_uid(tmpl),
+                })
+                custom_title_refs[tmpl.name] = ref_id
 
     # 转场 effect（FCP 内置 Cross Dissolve — 使用 FxPlug uid）
     dissolve_ref = f"r{asset_id_counter}"
@@ -362,11 +395,20 @@ def export_fcpxml(
             is_title = clip.subtitle_style == "title"
             font_size = "200" if is_title else "150"
 
+            # 选择模板：有自定义模板时使用，否则用 Essential Title
+            use_title_ref = default_title_ref
+            use_title_name = "Essential Title"
+            if title_lib and title_lib.templates:
+                tmpl = get_template_for_style(title_lib, clip.subtitle_style, ts_counter - 1)
+                if tmpl and tmpl.name in custom_title_refs:
+                    use_title_ref = custom_title_refs[tmpl.name]
+                    use_title_name = tmpl.name
+
             title_elem = ET.SubElement(clip_elem, "title", {
-                "ref": title_ref,
+                "ref": use_title_ref,
                 "lane": "1",
                 "offset": "0s",
-                "name": "Essential Title",
+                "name": use_title_name,
                 "start": "3600s",
                 "duration": _rs(clip.display_duration),
             })

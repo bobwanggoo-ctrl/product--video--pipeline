@@ -203,6 +203,7 @@ class PipelineOrchestrator:
             reference_image_dir=input_data.get("reference_image_dir", str(settings.REFERENCE_IMAGES_DIR)),
             output_dir=input_data.get("output_dir", str(settings.FRAMES_DIR)),
             aspect_ratio=input_data.get("aspect_ratio", "16:9"),
+            error_keywords=input_data.get("error_keywords"),
         )
         return result
 
@@ -356,6 +357,7 @@ class PipelineOrchestrator:
             output_dir=input_data["output_dir"],
             bgm_dir=input_data.get("bgm_dir", ""),
             font_dir=input_data.get("font_dir", ""),
+            title_templates_dir=input_data.get("title_templates_dir", ""),
             sellpoint_text=input_data.get("sellpoint_text", ""),
             motion_results=input_data.get("motion_results"),
             layout_hints=input_data.get("layout_hints"),
@@ -475,6 +477,7 @@ class PipelineOrchestrator:
                 "output_dir": str(dirs["final"]),
                 "bgm_dir": ini.get("bgm_dir", ""),
                 "font_dir": ini.get("font_dir", ""),
+                "title_templates_dir": ini.get("title_templates_dir", ""),
                 "sellpoint_text": ini.get("sellpoint_text", ""),
                 "motion_results": out("frame_to_video").get("motion_results"),
                 "layout_hints": out("compliance_check").get("layout_hints"),

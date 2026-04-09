@@ -50,7 +50,7 @@
 |------|------|------|------|
 | 1 | 项目骨架搭建 | ✅ 完成 | 目录结构、配置、数据模型、工具函数、流水线编排器 |
 | 2 | 技能1: 卖点→分镜 | ✅ 完成 | 迁移优化转换器、拆分规则、添加运动提示、验证器、Type A/B 测试通过 |
-| 3 | 技能3: 合规性检查 | ✅ 完成 | Gemini Vision 全品类合规检查 + 排版建议 + Error_Keywords 闭环 |
+| 3 | 技能3: 合规性检查 | ✅ 完成 | Gemini Vision 质量审核 + Google Vision API 侵权检测（双层并行） |
 | 4 | 技能2: 分镜→画面帧 | ✅ 完成 | AI导航 图像生成 (GROUP_ID=3) + 批量提交/轮询 + 参考图上传 |
 | 5 | 技能4: 画面帧→视频 | ✅ 完成 | 场景感知运镜选择 + 三层结构 + Kling API 客户端 + 编排器集成 + 分批/补拍 |
 | 6 | 流水线编排器 | ✅ 完成 | 串联所有技能、半自动模式、选材逻辑、Skill 3 集成、checkpoint 恢复 |
@@ -83,7 +83,7 @@
 | 3 | checker.py 核心逻辑（参考图压缩/缓存、Vision 调用、并发批量） | ✅ 完成 |
 | 4 | orchestrator 集成（实调、传参、结果展示） | ✅ 完成 |
 | 5 | Skill 5 排版建议传递链路 | ✅ 完成 |
-| 6 | Error_Keywords → Skill 2 negative prompt 闭环 | ⬚ 待接入（Skill 2 消费端，~30行） |
+| 6 | Error_Keywords → Skill 2 negative prompt 闭环 | ✅ 完成 | generator.py 接收 error_keywords 拼接到 prompt |
 
 ### API 配置状态
 
@@ -93,6 +93,7 @@
 | AI导航 GROUP_ID=13 | Gemini-3-flash LLM + Vision | ✅ 已配置 | 技能1/3/5 共用 |
 | tu-zi (Reverse Prompt) | LLM 备选路由 | ✅ 已配置 | OpenAI 兼容接口 |
 | Kling AI | kling-v2-5 图生视频 (技能4) | ✅ 已配置 | JWT 认证，std模式，5s，16:9 |
+| Google Vision API | 侵权检测 (技能3) | ✅ 已配置 | Logo+Web反向搜图+IP标签，可选 |
 
 **关键决策：**
 - LLM 路由：AI导航 (Gemini-3-flash) 优先 → tu-zi (Reverse Prompt) 自动降级备选
@@ -101,17 +102,17 @@
 - 变速：1.0-2.0x 加速only，禁止慢放（AI 视频帧率不够）
 - 变速后时长 ≥ 1.5s（防止切得太快）
 - 输出：MP4 成品(字幕烧录+BGM) + 剪映 JSON + FCPXML v1.11（字幕/BGM 作独立轨道）
-- 合规检查：Gemini Vision 全品类通用（产品一致性+AI质量+侵权），Error_Keywords 可回传生图
+- 合规检查：双层并行 — Gemini Vision 质量审核（产品一致性+融合度+逻辑+AI质量+排版） + Google Vision API 侵权检测（Logo+Web+IP），Error_Keywords 回传 Skill 2 negative prompt
 
 ## 下一步 / Next Steps
 
 | 优先级 | 任务 | 说明 |
 |--------|------|------|
-| P1 | Error_Keywords 闭环 | Skill 3 的 FAIL/WARN 关键词回传 Skill 2 作为 negative prompt 重新生图（~30行） |
-| P1 | 全自动模式 UI 暴露 | main.py 加模式选择，代码层已支持（~5行） |
+| P1 | 全自动模式 UI 暴露 | ✅ main.py --auto 参数已支持 |
+| P1 | Error_Keywords 闭环 | ✅ Skill 3 → Skill 2 negative prompt 已完成 |
 | P2 | Amazon 链接输入 | 自动抓取商品信息 + 图片作为输入源 |
 | P2 | FCP Title 模板集成 | input/fcp_titles/ 已有 3 套模板包，可丰富 FCPXML 字幕样式 |
-| P3 | 侵权检测增强 | 当前 LLM 初筛，后续可接 Google Cloud Vision Logo Detection |
+| P3 | 侵权检测增强 | ✅ Google Cloud Vision API 已集成（Logo + Web反向搜图 + IP标签） |
 
 ## 架构 / Architecture
 

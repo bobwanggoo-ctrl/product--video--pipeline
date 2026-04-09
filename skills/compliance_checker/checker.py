@@ -1,7 +1,8 @@
 """Skill 3: 合规性检查 — 产品一致性 + AI 质量 + 侵权风险 + 排版建议。
 
-将 AI 生成图与用户上传的产品参考图送入 Gemini Vision，
-输出 ComplianceResult（供选材淘汰/降权）和 LayoutHint（供 Skill 5 排版参考）。
+双层并行检查：
+1. Gemini Vision：产品一致性、场景融合度、场景逻辑性、AI质量、排版建议
+2. Google Vision API：Logo 识别 + Web 反向搜图 + IP 标签（侵权检测）
 """
 
 import base64
@@ -19,6 +20,7 @@ from models.compliance import (
 from models.storyboard import Storyboard
 from utils.json_repair import extract_json
 
+from .copyright_checker import CopyrightRisk, check_copyright_batch
 from .prompts import COMPLIANCE_PROMPT, NO_REFERENCE_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,8 @@ def run(
 ) -> dict:
     """Skill 3 入口。
 
+    双层并行：Gemini Vision（质量/一致性） + Google Vision API（侵权检测）。
+
     Returns:
         {
             "compliance_results": list[ComplianceResult],
@@ -65,9 +69,27 @@ def run(
     shots = _get_all_shots(storyboard)
     logger.info(f"[Skill3] 开始合规检查: {len(shots)} shots, {len(ref_images_b64)} 张参考图")
 
-    results, layout_hints, error_keywords, per_shot_trace = _batch_check(
-        shots, frame_paths, ref_images_b64, reference_image_dir,
-    )
+    # ── 双层并行检查 ──
+    # Layer 1: Gemini Vision（质量/一致性/融合/排版）—— 多线程逐 shot
+    # Layer 2: Google Vision API（侵权检测）—— 批量一次调用
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as layer_executor:
+        copyright_future = layer_executor.submit(check_copyright_batch, frame_paths)
+
+        # Layer 1 在主线程执行（内部已有 ThreadPool）
+        results, layout_hints, error_keywords, per_shot_trace = _batch_check(
+            shots, frame_paths, ref_images_b64, reference_image_dir,
+        )
+
+        # 等待 Layer 2 完成
+        try:
+            copyright_risks = copyright_future.result(timeout=180.0)
+        except Exception as e:
+            logger.warning(f"[Skill3] 侵权检测层失败: {e}")
+            copyright_risks = {}
+
+    # ── 合并侵权检测结果 ──
+    if copyright_risks:
+        _merge_copyright(results, copyright_risks, error_keywords)
 
     # 日志汇总
     pass_count = sum(1 for r in results if r.level == ComplianceLevel.PASS)
@@ -88,6 +110,10 @@ def run(
         "_trace": {
             "prompt_template": COMPLIANCE_PROMPT if has_ref else NO_REFERENCE_PROMPT,
             "per_shot": per_shot_trace,
+            "copyright_risks": {
+                sid: {"risk": cr.risk, "reasons": cr.reasons}
+                for sid, cr in copyright_risks.items()
+            } if copyright_risks else {},
             "meta": {
                 "total_shots": len(shots),
                 "checked": len(results),
@@ -96,6 +122,7 @@ def run(
                 "fail": fail_count,
                 "has_reference": has_ref,
                 "reference_count": len(ref_images_b64),
+                "copyright_checked": len(copyright_risks),
             },
         },
     }
@@ -344,11 +371,10 @@ def _parse_result(
     for item in data.get("Quality_And_Risk_Issues", []):
         if isinstance(item, dict):
             cat = item.get("category", "artifact")
-            sev = ComplianceLevel.FAIL if cat == "copyright" else level
             issues.append(ComplianceIssue(
                 category=cat,
                 description=item.get("description", ""),
-                severity=sev,
+                severity=level,
             ))
 
     summary = data.get("Summary", "")
@@ -378,6 +404,94 @@ def _parse_layout_hint(shot_id: int, data: dict) -> LayoutHint | None:
         reason=ls.get("reason", ""),
         avoid_zone=ls.get("avoid_zone", ""),
     )
+
+
+# ── 侵权结果合并 ─────────────────────────────────────────
+
+# level 严重度排序
+_LEVEL_ORDER = {ComplianceLevel.PASS: 0, ComplianceLevel.WARN: 1, ComplianceLevel.FAIL: 2}
+
+
+def _merge_copyright(
+    results: list[ComplianceResult],
+    copyright_risks: dict[int, CopyrightRisk],
+    error_keywords: dict[int, list[str]],
+) -> None:
+    """将 Google Vision API 侵权检测结果合并到 ComplianceResult 中（原地修改）。
+
+    - high → FAIL + error_keywords（品牌名/IP 名 → negative prompt）
+    - medium → WARN + 标注"疑似侵权"
+    - low/unknown → 不影响
+    """
+    for cr in results:
+        risk = copyright_risks.get(cr.shot_id)
+        if not risk or risk.risk in ("low", "unknown"):
+            continue
+
+        # 构造侵权 issues
+        copyright_issues: list[ComplianceIssue] = []
+        copyright_kw: list[str] = []
+
+        if risk.logos:
+            copyright_issues.append(ComplianceIssue(
+                category="copyright_logo",
+                description=f"检测到品牌Logo: {', '.join(risk.logos)}",
+                severity=ComplianceLevel.FAIL,
+            ))
+            for logo in risk.logos:
+                copyright_kw.append(f"no {logo} logo")
+
+        if risk.stock_hits:
+            copyright_issues.append(ComplianceIssue(
+                category="copyright_stock",
+                description=f"匹配到素材库: {', '.join(risk.stock_hits)}",
+                severity=ComplianceLevel.FAIL,
+            ))
+            copyright_kw.extend(["original photo", "no stock image"])
+
+        if risk.ip_hits:
+            copyright_issues.append(ComplianceIssue(
+                category="copyright_ip",
+                description=f"疑似IP形象: {', '.join(risk.ip_hits)}",
+                severity=ComplianceLevel.WARN if risk.risk == "medium" else ComplianceLevel.FAIL,
+            ))
+            copyright_kw.extend(["no cartoon character", "no anime"])
+
+        # 如果有 reasons 但没有细分命中（可能是多匹配/多域名导致的 medium）
+        if not copyright_issues and risk.reasons:
+            copyright_issues.append(ComplianceIssue(
+                category="copyright_web",
+                description="; ".join(risk.reasons),
+                severity=ComplianceLevel.WARN,
+            ))
+
+        # 合并 issues
+        cr.issues.extend(copyright_issues)
+
+        # 合并 error_keywords
+        if copyright_kw:
+            cr.error_keywords = list(set(cr.error_keywords + copyright_kw))
+            error_keywords[cr.shot_id] = cr.error_keywords
+
+        # 升级 level（取更严重的）
+        if risk.risk == "high":
+            target_level = ComplianceLevel.FAIL
+            target_score = 0.2
+        else:  # medium
+            target_level = ComplianceLevel.WARN
+            target_score = 0.6
+
+        if _LEVEL_ORDER.get(target_level, 0) > _LEVEL_ORDER.get(cr.level, 0):
+            cr.level = target_level
+        cr.score = min(cr.score, target_score)
+
+        # 更新 summary
+        risk_label = "侵权" if risk.risk == "high" else "疑似侵权"
+        reason_str = "; ".join(risk.reasons[:2])
+        if cr.summary:
+            cr.summary = f"{cr.summary} | [{risk_label}] {reason_str}"
+        else:
+            cr.summary = f"[{risk_label}] {reason_str}"
 
 
 def _default_result(shot_id: int, frame_path: str) -> ComplianceResult:

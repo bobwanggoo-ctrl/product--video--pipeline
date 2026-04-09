@@ -12,7 +12,8 @@ class ComplianceLevel(str, Enum):
 
 class ComplianceIssue(BaseModel):
     """A single compliance issue found in a frame."""
-    category: str  # "geometry" | "texture" | "proportion" | "color" | "anatomy" | "artifact" | "copyright"
+    category: str  # Gemini Vision: "geometry"|"texture"|"proportion"|"color"|"anatomy"|"artifact"
+                   # Google Vision API: "copyright_logo"|"copyright_stock"|"copyright_ip"|"copyright_web"
     description: str
     severity: ComplianceLevel = ComplianceLevel.WARN
 
