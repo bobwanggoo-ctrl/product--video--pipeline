@@ -268,9 +268,7 @@
 	<publishSettings>
 		<version>2</version>
 		<target object="10045" channel="./2/369" name="Text"/>
-		<target object="10235" channel="./2/369" name="Text"/>
 		<target object="10047" channel="./83" name="Font"/>
-		<target object="10239" channel="./83" name="Font"/>
 		<target object="10104" channel="./1/100/105/1" name="Line Control 01"/>
 		<target object="10242" channel="./1/100/105/1" name="Line Control 02"/>
 		<target object="10003" channel="./1/100/101" name="Main Position"/>
@@ -315,135 +313,7 @@
 		<layer name="Edit Here 02" id="10232">
 			<layer name="Edit Text 02" id="10233">
 				<layer name="Text 01 copy" id="10234">
-					<scenenode name="Do wrong to none " id="10235" factoryID="17" version="5">
-						<paragraphMarginsCached cached="0"/>
-						<scrollMarginsCached cached="0"/>
-						<crawlMarginsCached cached="0"/>
-						<host hostID="0"/>
-						<textPathModified textPathModifiedVal="0"/>
-						<paragraphStyle id="10236"/>
-						<style name="Style" id="10239" factoryID="1">
-							<copyFlags>65535</copyFlags>
-							<previewWidth>0</previewWidth>
-							<previewHeight>0</previewHeight>
-							<presetName>Normal</presetName>
-							<timing in="0 1 1 0" out="772772 120000 1 0" offset="0 1 1 0"/>
-							<baseFlags>8657043504</baseFlags>
-							<foldFlags>851968</foldFlags>
-							<parameter name="Font" id="83" flags="12884906000">
-								<font>UniSansDemo-HeavyItalicCaps</font>
-								<defaultFont>Helvetica</defaultFont>
-							</parameter>
-							<parameter name="Size" id="3" flags="8606711824" default="48" value="60"/>
-							<parameter name="Face" id="14" flags="8589938704">
-								<foldFlags>131072</foldFlags>
-								<parameter name="Texture" id="18" flags="77309415440">
-									<parameter name="Image" id="1" flags="77326254096" default="0" value="0"/>
-									<parameter name="Wrap Mode" id="5" flags="8606777360" default="0" value="1"/>
-								</parameter>
-							</parameter>
-							<parameter name="Drop Shadow" id="21" flags="8589971472">
-								<foldFlags>131072</foldFlags>
-								<parameter name="Texture" id="25" flags="77309415440">
-									<parameter name="Image" id="1" flags="77326254096" default="0" value="0"/>
-									<parameter name="Wrap Mode" id="5" flags="8606777360" default="0" value="1"/>
-								</parameter>
-							</parameter>
-							<parameter name="Outline" id="30" flags="8589971472">
-								<foldFlags>131072</foldFlags>
-								<parameter name="Texture" id="34" flags="77309415440">
-									<parameter name="Image" id="1" flags="77326254096" default="0" value="0"/>
-									<parameter name="Wrap Mode" id="5" flags="8606777360" default="0" value="1"/>
-								</parameter>
-							</parameter>
-							<parameter name="Glow" id="38" flags="8589973520">
-								<foldFlags>131072</foldFlags>
-								<parameter name="Texture" id="42" flags="77309415440">
-									<parameter name="Image" id="1" flags="77326254096" default="0" value="0"/>
-									<parameter name="Wrap Mode" id="5" flags="8606777360" default="0" value="1"/>
-								</parameter>
-							</parameter>
-							<parameter name="3D Text" id="89" flags="8589971472">
-								<foldFlags>131072</foldFlags>
-								<parameter name="Lighting" id="527" flags="8589938704">
-									<foldFlags>8388608</foldFlags>
-									<parameter name="Environment" id="512" flags="12884906000">
-										<foldFlags>131076</foldFlags>
-									</parameter>
-								</parameter>
-							</parameter>
-						</style>
-						<styleRun style="10239" offset="0" length="17"/>
-						<aspectRatio>0</aspectRatio>
-						<flags>0</flags>
-						<timing in="0 1 1 0" out="772772 120000 1 0" offset="0 1 1 0"/>
-						<foldFlags>65537</foldFlags>
-						<baseFlags>34078736</baseFlags>
-						<parameter name="Properties" id="1" flags="8589938704">
-							<parameter name="Transform" id="100" flags="8589938704">
-								<parameter name="Position" id="101" flags="8589938704">
-									<foldFlags>15</foldFlags>
-									<parameter name="X" id="1" flags="8606711824" default="0" value="-326.06000351891424"/>
-									<parameter name="Y" id="2" flags="8606711824" default="0" value="-16.500000000001812"/>
-								</parameter>
-							</parameter>
-							<parameter name="Lighting" id="230" flags="8589938706">
-								<foldFlags>15</foldFlags>
-							</parameter>
-							<parameter name="Shadows" id="234" flags="8589938706">
-								<foldFlags>15</foldFlags>
-							</parameter>
-							<parameter name="Reflection" id="223" flags="8589971474">
-								<foldFlags>131087</foldFlags>
-							</parameter>
-							<parameter name="Drop Shadow" id="208" flags="8589971474">
-								<foldFlags>131087</foldFlags>
-							</parameter>
-							<parameter name="Four Corner" id="207" flags="8589971458">
-								<foldFlags>131087</foldFlags>
-							</parameter>
-							<parameter name="Crop" id="216" flags="8589971474">
-								<foldFlags>131087</foldFlags>
-							</parameter>
-						</parameter>
-						<parameter name="Object" id="2" flags="8589938704">
-							<parameter name="Text" id="369" flags="8606777344">
-								<text>Do wrong to none </text>
-							</parameter>
-							<parameter name="Render Text" id="360" flags="8590000146" default="0" value="0"/>
-							<parameter name="Face Camera" id="352" flags="8589934610" default="0" value="0"/>
-							<parameter name="Path Options" id="329" flags="8589938704">
-								<parameter name="Shape Source" id="339" flags="77326254096" default="0" value="0"/>
-								<parameter name="Align to Path" id="333" flags="8589934610" default="1" value="1"/>
-							</parameter>
-							<parameter name="Basic" id="2000" flags="12884938770" factoryID="0">
-								<parameter name="Substance" id="10028" flags="12884906002" factoryID="0">
-									<parameter name="Color" id="1" flags="4295004162">
-										<foldFlags>15</foldFlags>
-									</parameter>
-									<parameter name="Opacity" id="2" flags="4295000066" default="1" value="1"/>
-								</parameter>
-							</parameter>
-						</parameter>
-						<filter name="Colorize copy" id="10434" factoryID="21" pluginUUID="D995BBCF-F766-4950-89D5-7A4828CD9B6F" pluginVersion="1" pluginName="Colorize copy" pluginDynamicParams="0">
-							<timing in="0 1 1 0" out="772772 120000 1 0" offset="0 1 1 0"/>
-							<baseFlags>8589934608</baseFlags>
-							<parameter name="Remap Black To" id="1" flags="12884906000">
-								<foldFlags>15</foldFlags>
-							</parameter>
-							<parameter name="Remap White To" id="2" flags="12884906001">
-								<foldFlags>15</foldFlags>
-								<parameter name="Red" id="1" flags="8606711824" default="1" value="1.0000001192092896"/>
-								<parameter name="Green" id="2" flags="8606711824" default="0.81176471710205078" value="1.0000001192092896"/>
-								<parameter name="Blue" id="3" flags="8606711824" default="0.63921570777893066" value="1.0000001192092896"/>
-							</parameter>
-							<parameter name="Intensity" id="3" flags="12901679120" default="1" value="1"/>
-							<parameter name="Mix" id="10001" flags="12901679104" default="1" value="1"/>
-							<parameter name="Flip" id="10002" flags="12905938976" default="0" value="0"/>
-							<parameter name="Input Points" id="10003" flags="12905938976" default="1" value="1"/>
-						</filter>
-					</scenenode>
-					<layer name="Rectangle 01 copy" id="10241">
+							<layer name="Rectangle 01 copy" id="10241">
 						<scenenode name="Rectangle copy" id="10242" factoryID="12" version="5">
 							<isShapeStyle>0</isShapeStyle>
 							<aspectRatio>1</aspectRatio>

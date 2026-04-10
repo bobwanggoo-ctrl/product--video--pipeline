@@ -478,13 +478,10 @@ def export_fcpxml(
                     cfg = get_social_media_config(tmpl)
 
                     # DTD 顺序：param* → text* → text-style-def* → adjust-transform?
-                    # text_slots = 模板的 Text 槽位数，必须全部填满，否则未填槽显示默认占位文字
-                    text_slots = cfg.get("text_slots", 1)
                     alignment = cfg.get("alignment", "center")
-                    for _ in range(text_slots):
-                        text_elem = ET.SubElement(title_elem, "text")
-                        ts_node = ET.SubElement(text_elem, "text-style", ref=ts_id)
-                        ts_node.text = clip.subtitle_text  # 所有槽填同一条文案
+                    text_elem = ET.SubElement(title_elem, "text")
+                    ts_node = ET.SubElement(text_elem, "text-style", ref=ts_id)
+                    ts_node.text = clip.subtitle_text
                     tsd = ET.SubElement(title_elem, "text-style-def", id=ts_id)
                     ET.SubElement(tsd, "text-style", {
                         "font": "Helvetica",
