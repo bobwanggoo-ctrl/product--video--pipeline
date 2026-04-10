@@ -29,6 +29,8 @@ REVERSE_PROMPT_API_KEY = os.getenv("REVERSE_PROMPT_API_KEY", "")
 REVERSE_PROMPT_BASE_URL = os.getenv("REVERSE_PROMPT_BASE_URL", "https://api.tu-zi.com/v1")
 REVERSE_PROMPT_PATH = os.getenv("REVERSE_PROMPT_PATH", "/chat/completions")
 REVERSE_PROMPT_MODEL = os.getenv("REVERSE_PROMPT_MODEL", "gemini-3-flash-preview")
+# Vision 专用快速模型（比主模型响应更快）
+REVERSE_PROMPT_VISION_MODEL = os.getenv("REVERSE_PROMPT_VISION_MODEL", "gemini-3-flash-preview")
 
 # --- AI导航 (yswg) ---
 AI_NAV_BASE_URL = os.getenv("AI_NAV_BASE_URL", "http://yswg.love:15091/api/admin")

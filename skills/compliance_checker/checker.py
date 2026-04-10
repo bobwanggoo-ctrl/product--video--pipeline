@@ -28,9 +28,9 @@ logger = logging.getLogger(__name__)
 # 支持的图片格式
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
-# 并发控制
-MAX_WORKERS = 3
-TIMEOUT_PER_SHOT = 200.0
+# 并发控制 — tu-zi 限流时降为 1（顺序跑避免同时触发重试）
+MAX_WORKERS = 1
+TIMEOUT_PER_SHOT = 300.0
 
 # Final_Status → score 映射
 _STATUS_SCORE = {
@@ -146,7 +146,7 @@ def _load_reference_images(ref_dir: str) -> list[str]:
         return []
 
     result = []
-    for img_file in images[:6]:  # 最多 6 张参考图
+    for img_file in images[:1]:  # 只取第 1 张参考图 — 减少 payload，避免 tu-zi 超时
         try:
             b64 = _compress_image(str(img_file))
             result.append(b64)
@@ -284,23 +284,33 @@ def _check_single_shot(
 
     trace["prompt"] = prompt
 
-    # 调用 Vision LLM
-    try:
-        from utils.llm_client import llm_client
-        raw = llm_client.call_vision(prompt, all_images)
-        trace["raw_response"] = raw
-    except Exception as e:
-        logger.warning(f"  [Skill3] shot_{sid:02d} Vision 调用失败: {e}")
-        trace["error"] = str(e)
-        return _default_result(sid, frame_path), None, trace
+    # 调用 Vision LLM（JSON 解析失败时重试一次）
+    raw = None
+    for attempt in range(1, 3):
+        try:
+            from utils.llm_client import llm_client
+            raw = llm_client.call_vision(prompt, all_images)
+            trace["raw_response"] = raw
+        except Exception as e:
+            logger.warning(f"  [Skill3] shot_{sid:02d} Vision 调用失败 (attempt={attempt}): {e}")
+            trace["error"] = str(e)
+            if attempt == 2:
+                return _default_result(sid, frame_path), None, trace
+            continue
 
-    # 解析结果
-    try:
-        data = extract_json(raw)
-        trace["parsed"] = data
-    except Exception as e:
-        logger.warning(f"  [Skill3] shot_{sid:02d} JSON 解析失败: {e}\n  raw: {raw[:200]}")
-        trace["parse_error"] = str(e)
+        # 解析结果
+        try:
+            data = extract_json(raw)
+            trace["parsed"] = data
+            break  # 解析成功，退出重试循环
+        except Exception as e:
+            logger.warning(f"  [Skill3] shot_{sid:02d} JSON 解析失败 (attempt={attempt}): {e}\n  raw: {raw[:200]}")
+            trace["parse_error"] = str(e)
+            if attempt == 2:
+                return _default_result(sid, frame_path), None, trace
+            # 第 1 次失败：重试，在 prompt 里强调必须返回 JSON
+            prompt = prompt + "\n\n[重要] 你必须只返回 JSON 对象，不要包含任何代码、说明或多余文字。"
+    else:
         return _default_result(sid, frame_path), None, trace
 
     cr = _parse_result(sid, frame_path, reference_image_dir, data)

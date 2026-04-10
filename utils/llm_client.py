@@ -106,10 +106,14 @@ class LLMClient:
         image_base64_list: list[str],
         max_tokens: int = 4096,
     ) -> str:
-        """Call tu-zi Vision via OpenAI-compatible multimodal messages."""
+        """Call tu-zi Vision via OpenAI-compatible multimodal messages.
+
+        使用 REVERSE_PROMPT_VISION_MODEL（默认 gemini-2.5-flash-lite），比主模型更快。
+        """
         base_url = settings.REVERSE_PROMPT_BASE_URL.rstrip("/")
-        path = settings.REVERSE_PROMPT_PATH
-        model = settings.REVERSE_PROMPT_MODEL
+        path = "/chat/completions"
+        # REVERSE_PROMPT_BASE_URL 已含 /v1，path 不再重复
+        model = settings.REVERSE_PROMPT_VISION_MODEL
         url = f"{base_url}{path}"
 
         content: list = [{"type": "text", "text": prompt}]
@@ -135,7 +139,7 @@ class LLMClient:
         last_exc = None
         for attempt in range(1, 4):
             try:
-                resp = requests.post(url, headers=headers, json=payload, timeout=(10, 180))
+                resp = requests.post(url, headers=headers, json=payload, timeout=(10, 300))
                 resp.raise_for_status()
                 elapsed_ms = int((time.perf_counter() - started_at) * 1000)
                 logger.info(f"[Vision][END][ReversePrompt] elapsed_ms={elapsed_ms} attempt={attempt}")
@@ -224,7 +228,7 @@ class LLMClient:
         last_exc = None
         for attempt in range(1, 4):
             try:
-                resp = requests.post(url, headers=headers, json=payload, timeout=(10, 180))
+                resp = requests.post(url, headers=headers, json=payload, timeout=(10, 300))
                 resp.raise_for_status()
                 elapsed_ms = int((time.perf_counter() - started_at) * 1000)
                 logger.info(f"[LLM][END][ReversePrompt] model={model} elapsed_ms={elapsed_ms} attempt={attempt}")
