@@ -538,13 +538,13 @@ def _get_fcp_position(position: str, style: str) -> tuple[str, str]:
     FCP 坐标系：1920x1080 画布中心 (0,0)，Y 轴向上为正。
     X 范围 ≈ -960~960，Y 范围 ≈ -540~540。
 
-    title 样式放画面下 1/3（y≈-89），selling_point 放画面底部偏上（y≈-300）。
+    title 样式放画面下 1/3（y≈-89），selling_point 默认右下（x=430, y=-480）。
     """
     # Y 坐标：style 决定垂直层级
     if style == "title":
         y_top, y_bottom = "400", "-89"
     else:
-        y_top, y_bottom = "430", "-300"
+        y_top, y_bottom = "430", "-480"
 
     y_map = {
         "top_left": y_top, "top_center": y_top, "top_right": y_top,
@@ -552,12 +552,19 @@ def _get_fcp_position(position: str, style: str) -> tuple[str, str]:
     }
 
     # X 坐标：position 决定水平位置
-    x_map = {
-        "top_left": "-600", "top_center": "0", "top_right": "600",
-        "bottom_left": "-600", "bottom_center": "0", "bottom_right": "600",
-    }
+    # selling_point bottom_center 默认偏右 430（LLM 指定其他位置时走各自映射）
+    if style == "selling_point":
+        x_map = {
+            "top_left": "-600", "top_center": "0", "top_right": "600",
+            "bottom_left": "-600", "bottom_center": "430", "bottom_right": "600",
+        }
+    else:
+        x_map = {
+            "top_left": "-600", "top_center": "0", "top_right": "600",
+            "bottom_left": "-600", "bottom_center": "0", "bottom_right": "600",
+        }
 
-    x_pos = x_map.get(position, "0")
+    x_pos = x_map.get(position, "430" if style == "selling_point" else "0")
     y_pos = y_map.get(position, y_bottom)
     return x_pos, y_pos
 
