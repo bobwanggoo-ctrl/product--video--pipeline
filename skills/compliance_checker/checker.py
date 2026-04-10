@@ -158,8 +158,11 @@ def _load_reference_images(ref_dir: str) -> list[str]:
     return result
 
 
-def _compress_image(image_path: str, max_size: int = 1024) -> str:
-    """压缩图片到 max_size，返回 base64 JPEG。"""
+def _compress_image(image_path: str, max_size: int = 768) -> str:
+    """压缩图片到 max_size，返回 base64 JPEG。
+
+    768px: 在 Vision 识别质量和 API payload 大小之间取得平衡。
+    """
     from PIL import Image
 
     img = Image.open(image_path)
@@ -168,7 +171,7 @@ def _compress_image(image_path: str, max_size: int = 1024) -> str:
         img = img.convert("RGB")
     img.thumbnail((max_size, max_size), Image.LANCZOS)
     buffer = io.BytesIO()
-    img.save(buffer, format="JPEG", quality=85)
+    img.save(buffer, format="JPEG", quality=80)
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 

@@ -74,25 +74,91 @@ class LLMClient:
     ) -> str:
         """Call multimodal LLM with images (for compliance checking).
 
-        走 AI导航 GROUP_ID=13 (Gemini-3-flash)，异步任务模式，messages 格式。
+        走 reverse_prompt (tu-zi) 优先 — 稳定支持 Vision 多图。
+        AI导航 GROUP_ID=13 备用（模型厂商不稳定时自动降级）。
         """
+        use_reverse = (
+            preferred_llm != "ai_nav"
+            and settings.REVERSE_PROMPT_API_KEY
+        )
+
+        if use_reverse:
+            return self._call_reverse_prompt_vision(prompt, image_base64_list, max_tokens)
+
+        # AI导航 fallback
         from utils.ai_nav_client import AiNavClient
-
         client = AiNavClient(purpose="llm")
-
-        # base64 → data URI
         image_urls = [f"data:image/png;base64,{img_b64}" for img_b64 in image_base64_list]
-
         task_id = client.create_llm_task(
             system_prompt="",
             user_message=prompt,
             image_urls=image_urls,
         )
         result = client.wait_for_task(task_id, timeout=180.0)
-
         text = result.get("result_text", "")
         if not text:
             raise ValueError(f"Vision 返回空结果: {result}")
+        return text
+
+    def _call_reverse_prompt_vision(
+        self,
+        prompt: str,
+        image_base64_list: list[str],
+        max_tokens: int = 4096,
+    ) -> str:
+        """Call tu-zi Vision via OpenAI-compatible multimodal messages."""
+        base_url = settings.REVERSE_PROMPT_BASE_URL.rstrip("/")
+        path = settings.REVERSE_PROMPT_PATH
+        model = settings.REVERSE_PROMPT_MODEL
+        url = f"{base_url}{path}"
+
+        content: list = [{"type": "text", "text": prompt}]
+        for img_b64 in image_base64_list:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+            })
+
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": max_tokens,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.REVERSE_PROMPT_API_KEY}",
+        }
+
+        started_at = time.perf_counter()
+        logger.info(f"[Vision][START][ReversePrompt] images={len(image_base64_list)}")
+
+        last_exc = None
+        for attempt in range(1, 4):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=(10, 180))
+                resp.raise_for_status()
+                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                logger.info(f"[Vision][END][ReversePrompt] elapsed_ms={elapsed_ms} attempt={attempt}")
+                break
+            except requests.exceptions.RequestException as e:
+                last_exc = e
+                is_retryable = (
+                    isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+                    or (hasattr(e, "response") and e.response is not None and e.response.status_code in (429, 503))
+                )
+                if is_retryable and attempt < 3:
+                    sleep_sec = 1.5 * (2 ** (attempt - 1))
+                    logger.warning(f"[Vision][RETRY][ReversePrompt] attempt={attempt} sleep={sleep_sec:.1f}s")
+                    time.sleep(sleep_sec)
+                    continue
+                raise
+        else:
+            raise last_exc
+
+        data = resp.json()
+        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if not text:
+            raise ValueError(f"Vision 返回空结果: {data}")
         return text
 
     # ── AI导航 (���步任务) ────────────────────────────
