@@ -452,23 +452,9 @@ def export_fcpxml(
                 from .title_scanner import is_social_media_template, get_social_media_config, wrap_text_for_template
                 if is_social_media_template(tmpl):
                     cfg = get_social_media_config(tmpl)
-                    # position / scale via adjust-transform（百分比坐标系）
-                    if cfg.get("position"):
-                        ET.SubElement(title_elem, "adjust-transform", {
-                            "position": cfg["position"],
-                        })
-                    if cfg.get("scale"):
-                        # position + scale 合并到同一个 adjust-transform
-                        # 如果已有 position，移除再重建（ET 不支持就地修改属性追加）
-                        existing = title_elem.find("adjust-transform")
-                        attrs = {}
-                        if existing is not None:
-                            attrs["position"] = existing.get("position", "")
-                            title_elem.remove(existing)
-                        attrs["scale"] = cfg["scale"]
-                        ET.SubElement(title_elem, "adjust-transform", {k: v for k, v in attrs.items() if v})
 
-                    # 多行文字：每行一个 <text>，共用同一个 text-style-def
+                    # DTD 顺序：param* → text* → text-style-def* → adjust-transform?
+                    # 先写 text / text-style-def，最后写 adjust-transform
                     lines = wrap_text_for_template(clip.subtitle_text, tmpl)
                     alignment = cfg.get("alignment", "center")
                     for line in lines:
@@ -483,6 +469,15 @@ def export_fcpxml(
                         "fontColor": "1 1 1 1",
                         "alignment": alignment,
                     })
+
+                    # adjust-transform 放在最后（DTD 要求）
+                    transform_attrs = {}
+                    if cfg.get("position"):
+                        transform_attrs["position"] = cfg["position"]
+                    if cfg.get("scale"):
+                        transform_attrs["scale"] = cfg["scale"]
+                    if transform_attrs:
+                        ET.SubElement(title_elem, "adjust-transform", transform_attrs)
                 else:
                     # ── 084 SDMAC 遮罩动画模板 通用渲染 ──
                     _render_custom_title(title_elem, clip, ts_id, ts_counter)
