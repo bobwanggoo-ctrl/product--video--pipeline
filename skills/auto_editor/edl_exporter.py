@@ -473,18 +473,18 @@ def export_fcpxml(
 
             # ── Social Media Titles 模板渲染 ──
             if use_custom and title_lib and tmpl and tmpl.installed_path:
-                from .title_scanner import is_social_media_template, get_social_media_config, wrap_text_for_template
+                from .title_scanner import is_social_media_template, get_social_media_config
                 if is_social_media_template(tmpl):
                     cfg = get_social_media_config(tmpl)
 
                     # DTD 顺序：param* → text* → text-style-def* → adjust-transform?
-                    # 先写 text / text-style-def，最后写 adjust-transform
-                    lines = wrap_text_for_template(clip.subtitle_text, tmpl)
+                    # text_slots = 模板的 Text 槽位数，必须全部填满，否则未填槽显示默认占位文字
+                    text_slots = cfg.get("text_slots", 1)
                     alignment = cfg.get("alignment", "center")
-                    for line in lines:
+                    for _ in range(text_slots):
                         text_elem = ET.SubElement(title_elem, "text")
                         ts_node = ET.SubElement(text_elem, "text-style", ref=ts_id)
-                        ts_node.text = line
+                        ts_node.text = clip.subtitle_text  # 所有槽填同一条文案
                     tsd = ET.SubElement(title_elem, "text-style-def", id=ts_id)
                     ET.SubElement(tsd, "text-style", {
                         "font": "Helvetica",
