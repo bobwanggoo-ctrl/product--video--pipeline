@@ -22,8 +22,66 @@ FCP_TITLES_DIR = Path.home() / "Movies" / "Motion Templates.localized" / "Titles
 
 # 模板用途映射：subtitle_style → 模板包偏好
 STYLE_CATEGORY_MAP = {
-    "title": "084 SDMAC－PROTMK 炫酷文字遮罩动画",       # 标题用遮罩动画
-    "selling_point": "084 SDMAC－PROTMK 炫酷文字遮罩动画", # 卖点字幕也用遮罩动画
+    "title": "Social Media Titles",                          # 标题用 Social Media 动态模板
+    "selling_point": "084 SDMAC－PROTMK 炫酷文字遮罩动画",   # 卖点字幕用黄色遮罩动画
+}
+
+# Social Media Titles 各模板配置（来源：FCP 导出参照 XML）
+# position: adjust-transform position 值（百分比坐标，相对画布中心）
+# scale:    adjust-transform scale 值
+# max_lines: 模板视觉上支持的最多文字行数
+# title_ok: 适合作为标题使用  subtitle_ok: 适合作为字幕单行使用
+SOCIAL_MEDIA_TITLES_CONFIG: dict[str, dict] = {
+    "Scene 01": {
+        "max_lines": 2, "font_size": 55, "alignment": "center",
+        "scale": "1.5 1.5", "position": None,
+        "title_ok": True, "subtitle_ok": False,
+    },
+    "Scene 02": {
+        "max_lines": 3, "font_size": 60, "alignment": "center",
+        "scale": "1.4 1.4", "position": "0 5.55556",
+        "title_ok": True, "subtitle_ok": False,
+    },
+    "Scene 03": {
+        "max_lines": 2, "font_size": 60, "alignment": "right",
+        "scale": None, "position": None,
+        "title_ok": True, "subtitle_ok": False,
+    },
+    "Scene 04": {
+        "max_lines": 2, "font_size": 55, "alignment": "center",
+        "scale": "1.7 1.7", "position": None,
+        "title_ok": True, "subtitle_ok": False,
+    },
+    "Scene 05": {
+        "max_lines": 2, "font_size": 57, "alignment": "center",
+        "scale": "1.8 1.8", "position": None,
+        "title_ok": True, "subtitle_ok": False,
+    },
+    "Scene 06": {
+        "max_lines": 3, "font_size": 58, "alignment": "left",
+        "scale": "1.36 1.36", "position": "15 11.7593",
+        "title_ok": True, "subtitle_ok": False,
+    },
+    "Scene 08": {
+        "max_lines": 2, "font_size": 60, "alignment": "left",
+        "scale": "1.27 1.27", "position": "8.33333 -11.1111",
+        "title_ok": True, "subtitle_ok": False,
+    },
+    "Scene 09": {
+        "max_lines": 1, "font_size": 65, "alignment": "center",
+        "scale": None, "position": "47.2222 -39.2828",
+        "title_ok": False, "subtitle_ok": True,
+    },
+    "Scene 10": {
+        "max_lines": 2, "font_size": 60, "alignment": "center",
+        "scale": "1.91 1.91", "position": None,
+        "title_ok": True, "subtitle_ok": False,
+    },
+    "Scene 12": {
+        "max_lines": 3, "font_size": 60, "alignment": "center",
+        "scale": "1.37 1.37", "position": None,
+        "title_ok": True, "subtitle_ok": False,
+    },
 }
 
 
@@ -183,6 +241,18 @@ def get_template_for_style(
     preferred_category = STYLE_CATEGORY_MAP.get(style, "Social Media Titles")
 
     candidates = lib.categories.get(preferred_category, [])
+
+    # Social Media Titles：title 只取 title_ok 模板，selling_point 只取 subtitle_ok 模板
+    if preferred_category == "Social Media Titles" and candidates:
+        if style == "selling_point":
+            filtered = [t for t in candidates
+                        if SOCIAL_MEDIA_TITLES_CONFIG.get(t.name, {}).get("subtitle_ok")]
+        else:
+            filtered = [t for t in candidates
+                        if SOCIAL_MEDIA_TITLES_CONFIG.get(t.name, {}).get("title_ok")]
+        if filtered:
+            candidates = filtered
+
     if not candidates:
         # 降级到任何可用模板
         candidates = lib.templates
@@ -193,7 +263,44 @@ def get_template_for_style(
     return candidates[index % len(candidates)]
 
 
-def get_fcpxml_uid(template: TitleTemplate) -> str:
+def is_social_media_template(template: TitleTemplate) -> bool:
+    """是否为 Social Media Titles 模板（影响 FCPXML 生成方式）。"""
+    return template.category == "Social Media Titles"
+
+
+def get_social_media_config(template: TitleTemplate) -> dict:
+    """获取 Social Media 模板配置，不存在时返回空 dict。"""
+    return SOCIAL_MEDIA_TITLES_CONFIG.get(template.name, {})
+
+
+def wrap_text_for_template(text: str, template: TitleTemplate) -> list[str]:
+    """将文本按模板行数限制分行。
+
+    Social Media Titles 模板有固定行数上限（max_lines），超出部分会被截断。
+    本函数按汉字/英文词边界分割，保证行数 ≤ max_lines。
+
+    Returns:
+        list of str，每个元素对应一行 <text>。
+    """
+    config = get_social_media_config(template)
+    max_lines = config.get("max_lines", 2)
+
+    if not text:
+        return [""]
+
+    # 按换行符或"；""。"分段（用户可能已手动换行）
+    import re
+    parts = [p.strip() for p in re.split(r"[\n；。]", text) if p.strip()]
+
+    if len(parts) <= max_lines:
+        return parts or [text]
+
+    # 超出行数：把后面的行合并到最后一行
+    result = parts[:max_lines - 1]
+    result.append(" ".join(parts[max_lines - 1:]))
+    return result
+
+
     """获取模板的 FCPXML effect uid。
 
     FCP 通过 .moti 文件的绝对路径来识别自定义模板。

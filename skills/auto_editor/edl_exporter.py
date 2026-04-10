@@ -410,6 +410,7 @@ def export_fcpxml(
             use_custom = custom_title_ref is not None
             use_ref = custom_title_ref if use_custom else default_title_ref
             use_name = custom_title_name if use_custom else "Essential Title"
+            tmpl = None  # 当前 clip 选中的模板，稍后可能被覆盖
 
             # 自定义模板可以按 clip 轮换不同模板
             if use_custom and title_lib:
@@ -446,41 +447,48 @@ def export_fcpxml(
                 "duration": _rs(clip.display_duration),
             })
 
-            if use_custom:
-                # 自定义模板参数（参照 FCP 导出格式）
-                x_pos, y_pos = _get_fcp_position(clip.subtitle_position, clip.subtitle_style)
-                ET.SubElement(title_elem, "param", {
-                    "name": "位置",
-                    "key": "9999/2310926/2310927/1/100/101",
-                    "value": f"{x_pos} {y_pos}",
-                })
-            else:
-                # Essential Title 参数
-                x_pos, y_pos = _get_fcp_position(clip.subtitle_position, clip.subtitle_style)
-                ET.SubElement(title_elem, "param", {
-                    "name": "Position",
-                    "key": "9999/10085/10086/1/100/101",
-                    "value": f"{x_pos} {y_pos}",
-                })
+            # ── Social Media Titles 模板渲染 ──
+            if use_custom and title_lib and tmpl and tmpl.installed_path:
+                from .title_scanner import is_social_media_template, get_social_media_config, wrap_text_for_template
+                if is_social_media_template(tmpl):
+                    cfg = get_social_media_config(tmpl)
+                    # position / scale via adjust-transform（百分比坐标系）
+                    if cfg.get("position"):
+                        ET.SubElement(title_elem, "adjust-transform", {
+                            "position": cfg["position"],
+                        })
+                    if cfg.get("scale"):
+                        # position + scale 合并到同一个 adjust-transform
+                        # 如果已有 position，移除再重建（ET 不支持就地修改属性追加）
+                        existing = title_elem.find("adjust-transform")
+                        attrs = {}
+                        if existing is not None:
+                            attrs["position"] = existing.get("position", "")
+                            title_elem.remove(existing)
+                        attrs["scale"] = cfg["scale"]
+                        ET.SubElement(title_elem, "adjust-transform", {k: v for k, v in attrs.items() if v})
 
-            text_elem = ET.SubElement(title_elem, "text")
-            ts_node = ET.SubElement(text_elem, "text-style", ref=ts_id)
-            ts_node.text = clip.subtitle_text
-            tsd = ET.SubElement(title_elem, "text-style-def", id=ts_id)
-            alignment = "left" if "left" in clip.subtitle_position else "right" if "right" in clip.subtitle_position else "center"
-            style_attrs = {
-                "font": "Impact",
-                "fontSize": font_size,
-                "fontFace": "Regular",
-                "fontColor": "1 1 1 1",
-                "bold": "1",
-                "baseline": "1",
-                "alignment": alignment,
-            }
-            if not is_title and not use_custom:
-                style_attrs["shadowColor"] = "0 0 0 0.75"
-                style_attrs["shadowOffset"] = "3 315"
-            ET.SubElement(tsd, "text-style", style_attrs)
+                    # 多行文字：每行一个 <text>，共用同一个 text-style-def
+                    lines = wrap_text_for_template(clip.subtitle_text, tmpl)
+                    alignment = cfg.get("alignment", "center")
+                    for line in lines:
+                        text_elem = ET.SubElement(title_elem, "text")
+                        ts_node = ET.SubElement(text_elem, "text-style", ref=ts_id)
+                        ts_node.text = line
+                    tsd = ET.SubElement(title_elem, "text-style-def", id=ts_id)
+                    ET.SubElement(tsd, "text-style", {
+                        "font": "Helvetica",
+                        "fontSize": str(cfg.get("font_size", 60)),
+                        "fontFace": "Regular",
+                        "fontColor": "1 1 1 1",
+                        "alignment": alignment,
+                    })
+                else:
+                    # ── 084 SDMAC 遮罩动画模板 通用渲染 ──
+                    _render_custom_title(title_elem, clip, ts_id, ts_counter)
+            else:
+                # ── Essential Title / 无模板 通用渲染 ──
+                _render_custom_title(title_elem, clip, ts_id, ts_counter, is_custom=False)
 
         # 累加 offset（不减 transition 时长，FCP 按 offset 定位）
         current_offset = _snap(current_offset + clip.display_duration)
@@ -572,3 +580,52 @@ def _get_fcp_position(position: str, style: str) -> tuple[str, str]:
 def _make_element(tag: str, attribs: dict) -> ET.Element:
     """Helper to create an Element with attributes."""
     return ET.Element(tag, attribs)
+
+
+def _render_custom_title(
+    title_elem: ET.Element,
+    clip,
+    ts_id: str,
+    ts_counter: int,
+    is_custom: bool = True,
+) -> None:
+    """084 SDMAC 遮罩动画模板 / Essential Title 通用字幕渲染。"""
+    is_title = clip.subtitle_style == "title"
+    font_size = "150" if is_title else "75"
+
+    x_pos, y_pos = _get_fcp_position(clip.subtitle_position, clip.subtitle_style)
+    if is_custom:
+        ET.SubElement(title_elem, "param", {
+            "name": "位置",
+            "key": "9999/2310926/2310927/1/100/101",
+            "value": f"{x_pos} {y_pos}",
+        })
+    else:
+        ET.SubElement(title_elem, "param", {
+            "name": "Position",
+            "key": "9999/10085/10086/1/100/101",
+            "value": f"{x_pos} {y_pos}",
+        })
+
+    text_elem = ET.SubElement(title_elem, "text")
+    ts_node = ET.SubElement(text_elem, "text-style", ref=ts_id)
+    ts_node.text = clip.subtitle_text
+    tsd = ET.SubElement(title_elem, "text-style-def", id=ts_id)
+    alignment = (
+        "left" if "left" in clip.subtitle_position
+        else "right" if "right" in clip.subtitle_position
+        else "center"
+    )
+    style_attrs = {
+        "font": "Impact",
+        "fontSize": font_size,
+        "fontFace": "Regular",
+        "fontColor": "1 1 1 1",
+        "bold": "1",
+        "baseline": "1",
+        "alignment": alignment,
+    }
+    if not is_title and not is_custom:
+        style_attrs["shadowColor"] = "0 0 0 0.75"
+        style_attrs["shadowOffset"] = "3 315"
+    ET.SubElement(tsd, "text-style", style_attrs)
