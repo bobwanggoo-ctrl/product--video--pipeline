@@ -108,62 +108,67 @@ class LLMClient:
     ) -> str:
         """Call tu-zi Vision via OpenAI-compatible multimodal messages.
 
-        使用 REVERSE_PROMPT_VISION_MODEL（默认 gemini-2.5-flash-lite），比主模型更快。
+        主路：REVERSE_PROMPT_VISION_MODEL（gemini-3-flash-preview）
+        备路：REVERSE_PROMPT_VISION_MODEL_FALLBACK（gemini-2.5-flash-lite），主路超时后自动降级。
         """
         base_url = settings.REVERSE_PROMPT_BASE_URL.rstrip("/")
         path = "/chat/completions"
-        # REVERSE_PROMPT_BASE_URL 已含 /v1，path 不再重复
-        model = settings.REVERSE_PROMPT_VISION_MODEL
         url = f"{base_url}{path}"
 
         content: list = [{"type": "text", "text": prompt}]
         for img_b64 in image_base64_list:
             content.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+                "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"},
             })
 
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": content}],
-            "max_tokens": max_tokens,
-        }
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {settings.REVERSE_PROMPT_API_KEY}",
         }
 
-        started_at = time.perf_counter()
-        logger.info(f"[Vision][START][ReversePrompt] images={len(image_base64_list)}")
+        models_to_try = [settings.REVERSE_PROMPT_VISION_MODEL]
+        fallback = getattr(settings, "REVERSE_PROMPT_VISION_MODEL_FALLBACK", "")
+        if fallback and fallback != settings.REVERSE_PROMPT_VISION_MODEL:
+            models_to_try.append(fallback)
 
         last_exc = None
-        for attempt in range(1, 4):
-            try:
-                resp = requests.post(url, headers=headers, json=payload, timeout=(10, 300))
-                resp.raise_for_status()
-                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-                logger.info(f"[Vision][END][ReversePrompt] elapsed_ms={elapsed_ms} attempt={attempt}")
-                break
-            except requests.exceptions.RequestException as e:
-                last_exc = e
-                is_retryable = (
-                    isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
-                    or (hasattr(e, "response") and e.response is not None and e.response.status_code in (429, 503))
-                )
-                if is_retryable and attempt < 3:
-                    sleep_sec = 1.5 * (2 ** (attempt - 1))
-                    logger.warning(f"[Vision][RETRY][ReversePrompt] attempt={attempt} sleep={sleep_sec:.1f}s")
-                    time.sleep(sleep_sec)
-                    continue
-                raise
-        else:
-            raise last_exc
+        for model_idx, model in enumerate(models_to_try):
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": content}],
+                "max_tokens": max_tokens,
+            }
+            started_at = time.perf_counter()
+            logger.info(f"[Vision][START][ReversePrompt] model={model} images={len(image_base64_list)}")
 
-        data = resp.json()
-        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        if not text:
-            raise ValueError(f"Vision 返回空结果: {data}")
-        return text
+            for attempt in range(1, 3):  # 每个模型最多重试 2 次
+                try:
+                    resp = requests.post(url, headers=headers, json=payload, timeout=(10, 120))
+                    resp.raise_for_status()
+                    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                    logger.info(f"[Vision][END][ReversePrompt] model={model} elapsed_ms={elapsed_ms}")
+                    data = resp.json()
+                    text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    if not text:
+                        raise ValueError(f"Vision 返回空结果: {data}")
+                    return text
+                except requests.exceptions.RequestException as e:
+                    last_exc = e
+                    is_retryable = isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+                    if is_retryable and attempt < 2:
+                        logger.warning(f"[Vision][RETRY][ReversePrompt] model={model} attempt={attempt}")
+                        time.sleep(2.0)
+                        continue
+                    # 超时/连接错 → 换下一个模型
+                    if is_retryable and model_idx < len(models_to_try) - 1:
+                        logger.warning(f"[Vision][FALLBACK] {model} 超时，切换到 {models_to_try[model_idx + 1]}")
+                    break
+                except Exception as e:
+                    last_exc = e
+                    break
+
+        raise RuntimeError(f"Vision 所有模型均失败: {last_exc}")
 
     # ── AI导航 (���步任务) ────────────────────────────
 
