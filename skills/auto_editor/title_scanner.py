@@ -57,7 +57,7 @@ def scan_templates(templates_dir: str = "") -> TitleTemplateLibrary:
     """
     if not templates_dir:
         from config import settings
-        templates_dir = str(settings.INPUT_DIR / "fcp_titles")
+        templates_dir = str(settings.FCP_TITLES_DIR)
 
     lib = TitleTemplateLibrary()
     base = Path(templates_dir)
