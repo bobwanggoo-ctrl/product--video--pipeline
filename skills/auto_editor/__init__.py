@@ -28,7 +28,7 @@ def run(
     *,
     bgm_dir: str = "",
     font_dir: str = "",
-    title_templates_dir: str = "",
+    title_templates_dir: str = "",  # 空时自动用 settings.FCP_TITLES_DIR
     sellpoint_text: str = "",
     motion_results: list[dict] | None = None,
     layout_hints: dict | None = None,
@@ -115,6 +115,10 @@ def run(
     jianying_path = str(out_dir / "draft_content.json")
     fcpxml_path = str(out_dir / "project.fcpxml")
     export_jianying_json(timeline, jianying_path, srt_paths["en"])
+    # title_templates_dir 未传时自动使用 assets/ 目录
+    if not title_templates_dir:
+        from config import settings
+        title_templates_dir = str(settings.FCP_TITLES_DIR)
     export_fcpxml(timeline, fcpxml_path, srt_paths["en"], title_templates_dir=title_templates_dir)
 
     logger.info("=" * 60)

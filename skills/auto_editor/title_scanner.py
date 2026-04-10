@@ -301,6 +301,7 @@ def wrap_text_for_template(text: str, template: TitleTemplate) -> list[str]:
     return result
 
 
+def get_fcpxml_uid(template: TitleTemplate) -> str:
     """获取模板的 FCPXML effect uid。
 
     FCP 通过 .moti 文件的绝对路径来识别自定义模板。
