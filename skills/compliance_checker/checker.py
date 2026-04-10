@@ -9,6 +9,7 @@ import base64
 import concurrent.futures
 import io
 import logging
+import math
 from pathlib import Path
 
 from models.compliance import (
@@ -21,15 +22,21 @@ from models.storyboard import Storyboard
 from utils.json_repair import extract_json
 
 from .copyright_checker import CopyrightRisk, check_copyright_batch
-from .prompts import COMPLIANCE_PROMPT, NO_REFERENCE_PROMPT
+from .prompts import (
+    BATCH_COMPLIANCE_PROMPT,
+    BATCH_NO_REFERENCE_PROMPT,
+    COMPLIANCE_PROMPT,
+    NO_REFERENCE_PROMPT,
+)
 
 logger = logging.getLogger(__name__)
 
 # 支持的图片格式
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
-# 并发控制 — tu-zi 限流时降为 1（顺序跑避免同时触发重试）
-MAX_WORKERS = 1
+# 并发控制
+MAX_WORKERS = 3       # 3 组 batch 并行
+BATCH_SIZE = 5        # 每组最多 5 张
 TIMEOUT_PER_SHOT = 300.0
 
 # Final_Status → score 映射
@@ -108,7 +115,7 @@ def run(
         "error_keywords": error_keywords,
         "skipped": False,
         "_trace": {
-            "prompt_template": COMPLIANCE_PROMPT if has_ref else NO_REFERENCE_PROMPT,
+            "prompt_template": BATCH_COMPLIANCE_PROMPT if has_ref else BATCH_NO_REFERENCE_PROMPT,
             "per_shot": per_shot_trace,
             "copyright_risks": {
                 sid: {"risk": cr.risk, "reasons": cr.reasons}
@@ -200,7 +207,7 @@ def _batch_check(
     reference_image_dir: str,
     max_workers: int = MAX_WORKERS,
 ) -> tuple[list[ComplianceResult], dict[int, LayoutHint], dict[int, list[str]], dict[int, dict]]:
-    """并发检查所有 shot。返回 (results, layout_hints, error_keywords, per_shot_trace)。"""
+    """批量检查所有 shot（Grid 模式：每组 5 张拼图，并发 3 组）。"""
     results: list[ComplianceResult] = []
     layout_hints: dict[int, LayoutHint] = {}
     error_keywords: dict[int, list[str]] = {}
@@ -213,34 +220,275 @@ def _batch_check(
         logger.warning("[Skill3] 无可检查的 shot（frame_paths 为空）")
         return results, layout_hints, error_keywords, per_shot_trace
 
+    # 分组：每组 BATCH_SIZE 张
+    groups: list[list[tuple[dict, str]]] = []
+    for i in range(0, len(checkable), BATCH_SIZE):
+        groups.append(checkable[i:i + BATCH_SIZE])
+
+    logger.info(f"[Skill3] 分 {len(groups)} 组批量检查（每组最多 {BATCH_SIZE} 张，并发 {max_workers}）")
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {}
-        for shot_info, frame_path in checkable:
+        for group in groups:
+            shot_ids = [s["shot_id"] for s, _ in group]
+            fp_map = {s["shot_id"]: fp for s, fp in group}
+            shot_info_map = {s["shot_id"]: s for s, _ in group}
             future = executor.submit(
-                _check_single_shot,
-                shot_info, frame_path, ref_images_b64, reference_image_dir,
+                _check_batch_group,
+                shot_ids, fp_map, shot_info_map,
+                ref_images_b64, reference_image_dir,
             )
-            future_map[future] = shot_info["shot_id"]
+            future_map[future] = shot_ids
 
         for future in concurrent.futures.as_completed(future_map):
-            sid = future_map[future]
+            shot_ids = future_map[future]
             try:
-                cr, lh, trace = future.result(timeout=TIMEOUT_PER_SHOT)
-                results.append(cr)
-                if lh:
-                    layout_hints[sid] = lh
-                if cr.error_keywords:
-                    error_keywords[sid] = cr.error_keywords
-                if trace:
-                    per_shot_trace[sid] = trace
+                batch_results = future.result(timeout=TIMEOUT_PER_SHOT * len(shot_ids))
+                for cr, lh, trace in batch_results:
+                    results.append(cr)
+                    if lh:
+                        layout_hints[cr.shot_id] = lh
+                    if cr.error_keywords:
+                        error_keywords[cr.shot_id] = cr.error_keywords
+                    if trace:
+                        per_shot_trace[cr.shot_id] = trace
             except Exception as e:
-                logger.warning(f"[Skill3] shot_{sid:02d} 检查失败: {e}")
-                fp = frame_paths.get(sid, "")
-                results.append(_default_result(sid, fp))
+                logger.warning(f"[Skill3] batch {shot_ids} 整组失败: {e}，降级单张")
+                for sid in shot_ids:
+                    fp = frame_paths.get(sid, "")
+                    results.append(_default_result(sid, fp))
 
-    # 按 shot_id 排序
     results.sort(key=lambda r: r.shot_id)
     return results, layout_hints, error_keywords, per_shot_trace
+
+
+# ── Grid 图生成 ───────────────────────────────────────────
+
+def _build_grid_image(
+    frame_paths: list[str],
+    tile_size: int = 480,
+    cols: int = 3,
+    gap: int = 8,
+) -> str:
+    """将 N 张帧图拼成 Grid，每个 tile 左上角画 [idx] 白字黑底标签，返回 base64 JPEG。
+
+    布局：最多 3 列，自动分行。最后一行不足 cols 时居中对齐。
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    n = len(frame_paths)
+    rows = math.ceil(n / cols)
+    canvas_w = cols * tile_size + (cols + 1) * gap
+    canvas_h = rows * tile_size + (rows + 1) * gap
+    canvas = Image.new("RGB", (canvas_w, canvas_h), (26, 26, 26))
+    draw = ImageDraw.Draw(canvas)
+
+    # 加载字体（优先系统 Arial，降级默认字体）
+    font = None
+    for font_path in ["/Library/Fonts/Arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]:
+        try:
+            from PIL import ImageFont
+            font = ImageFont.truetype(font_path, 28)
+            break
+        except Exception:
+            continue
+    if font is None:
+        from PIL import ImageFont
+        font = ImageFont.load_default()
+
+    for idx, path in enumerate(frame_paths):
+        row, col_in_row = divmod(idx, cols)
+
+        # 最后一行居中对齐
+        row_start = row * cols
+        row_end = min(row_start + cols, n)
+        row_len = row_end - row_start
+        col_offset = ((cols - row_len) * (tile_size + gap)) // 2
+
+        x0 = gap + col_in_row * (tile_size + gap) + col_offset
+        y0 = gap + row * (tile_size + gap)
+
+        # 加载并缩放图片（保持宽高比）
+        try:
+            img = Image.open(path)
+            if img.mode not in ("RGB",):
+                img = img.convert("RGB")
+            img.thumbnail((tile_size, tile_size), Image.LANCZOS)
+        except Exception as e:
+            logger.warning(f"[Skill3] Grid tile 加载失败 {path}: {e}")
+            img = Image.new("RGB", (tile_size, tile_size), (40, 40, 40))
+
+        # 居中贴入 tile
+        paste_x = x0 + (tile_size - img.width) // 2
+        paste_y = y0 + (tile_size - img.height) // 2
+        canvas.paste(img, (paste_x, paste_y))
+
+        # 画编号标签 [1]~[N]，白字黑底
+        label = f"[{idx + 1}]"
+        try:
+            bbox = draw.textbbox((0, 0), label, font=font)
+            lw = bbox[2] - bbox[0] + 8
+            lh = bbox[3] - bbox[1] + 4
+        except Exception:
+            lw, lh = 50, 30
+        draw.rectangle([x0 + 4, y0 + 4, x0 + 4 + lw, y0 + 4 + lh], fill=(0, 0, 0))
+        draw.text((x0 + 8, y0 + 6), label, fill=(255, 255, 255), font=font)
+
+    buf = io.BytesIO()
+    canvas.save(buf, format="JPEG", quality=75)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    logger.debug(f"[Skill3] Grid 生成: {n} tiles, {len(b64)//1024}KB base64")
+    return b64
+
+
+# ── 批量 shot 检查 ─────────────────────────────────────────
+
+def _check_batch_group(
+    batch_shot_ids: list[int],
+    fp_map: dict[int, str],
+    shot_info_map: dict[int, dict],
+    ref_images_b64: list[str],
+    reference_image_dir: str,
+) -> list[tuple[ComplianceResult, LayoutHint | None, dict]]:
+    """将一组 shot 拼成 Grid，一次 Vision 调用完成所有检查。
+
+    失败时自动降级为逐张单检（_check_single_shot）。
+    """
+    from utils.llm_client import llm_client
+
+    n = len(batch_shot_ids)
+    has_ref = len(ref_images_b64) > 0
+    frame_path_list = [fp_map[sid] for sid in batch_shot_ids]
+
+    # index → shot_id 映射（index 从 1 开始）
+    index_to_shot = {i + 1: sid for i, sid in enumerate(batch_shot_ids)}
+    index_map_str = ", ".join(f"[{k}]=shot_{v:02d}" for k, v in index_to_shot.items())
+
+    logger.info(f"[Skill3] batch 检查: shots={batch_shot_ids}")
+
+    # 生成 Grid 图
+    try:
+        grid_b64 = _build_grid_image(frame_path_list)
+    except Exception as e:
+        logger.warning(f"[Skill3] Grid 生成失败: {e}，降级单张")
+        return [
+            _check_single_shot(shot_info_map[sid], fp_map[sid], ref_images_b64, reference_image_dir)
+            for sid in batch_shot_ids
+        ]
+
+    # 构造 prompt
+    if has_ref:
+        prompt = BATCH_COMPLIANCE_PROMPT.format(n_tiles=n, index_map=index_map_str)
+    else:
+        prompt = BATCH_NO_REFERENCE_PROMPT.format(n_tiles=n, index_map=index_map_str)
+
+    all_images = ref_images_b64 + [grid_b64]
+    trace: dict = {"batch_shot_ids": batch_shot_ids, "index_map": index_map_str}
+
+    # Vision 调用（最多 2 次，第 2 次加强 JSON 要求）
+    raw = None
+    data = None
+    for attempt in range(1, 3):
+        try:
+            raw = llm_client.call_vision(prompt, all_images)
+            trace[f"raw_attempt_{attempt}"] = raw[:500]
+        except Exception as e:
+            logger.warning(f"[Skill3] batch Vision 失败 attempt={attempt}: {e}")
+            if attempt == 2:
+                logger.warning("[Skill3] batch 全部失败，降级单张")
+                return _fallback_single(batch_shot_ids, fp_map, shot_info_map, ref_images_b64, reference_image_dir)
+            continue
+
+        try:
+            data = extract_json(raw)
+            break
+        except Exception as e:
+            logger.warning(f"[Skill3] batch JSON 解析失败 attempt={attempt}: {e}")
+            if attempt == 2:
+                logger.warning("[Skill3] batch JSON 解析彻底失败，降级单张")
+                return _fallback_single(batch_shot_ids, fp_map, shot_info_map, ref_images_b64, reference_image_dir)
+            prompt = prompt + "\n\n[重要] 只返回顶层为 {\"frames\":[...]} 的 JSON，frames 必须包含全部帧，不要任何其他文字。"
+
+    if data is None:
+        return _fallback_single(batch_shot_ids, fp_map, shot_info_map, ref_images_b64, reference_image_dir)
+
+    return _parse_batch_result(index_to_shot, fp_map, reference_image_dir, data,
+                               shot_info_map, ref_images_b64)
+
+
+def _fallback_single(
+    shot_ids: list[int],
+    fp_map: dict[int, str],
+    shot_info_map: dict[int, dict],
+    ref_images_b64: list[str],
+    reference_image_dir: str,
+) -> list[tuple[ComplianceResult, LayoutHint | None, dict]]:
+    """批量失败时降级为逐张单检。"""
+    results = []
+    for sid in shot_ids:
+        try:
+            cr, lh, trace = _check_single_shot(
+                shot_info_map[sid], fp_map[sid], ref_images_b64, reference_image_dir
+            )
+        except Exception as e:
+            logger.warning(f"[Skill3] 降级单张 shot_{sid:02d} 也失败: {e}")
+            cr = _default_result(sid, fp_map.get(sid, ""))
+            lh, trace = None, {}
+        results.append((cr, lh, trace))
+    return results
+
+
+def _parse_batch_result(
+    index_to_shot: dict[int, int],
+    fp_map: dict[int, str],
+    reference_image_dir: str,
+    data: dict,
+    shot_info_map: dict[int, dict],
+    ref_images_b64: list[str],
+) -> list[tuple[ComplianceResult, LayoutHint | None, dict]]:
+    """将 batch Vision 输出（{"frames": [...]}）解析为每个 shot 的结果。
+
+    漏报的 shot 自动降级为单张检查。
+    """
+    frames_list = data.get("frames", [])
+    # 用 index 建索引（Vision 偶尔不保证顺序）
+    frame_by_index: dict[int, dict] = {}
+    for frame_data in frames_list:
+        idx = frame_data.get("index")
+        if isinstance(idx, int) and idx in index_to_shot:
+            frame_by_index[idx] = frame_data
+
+    results = []
+    for idx, sid in sorted(index_to_shot.items()):
+        fp = fp_map.get(sid, "")
+        fd = frame_by_index.get(idx)
+
+        if fd is None:
+            # Vision 漏报，降级单张
+            logger.warning(f"[Skill3] batch 漏报 index={idx} (shot_{sid:02d})，单张补检")
+            try:
+                cr, lh, trace = _check_single_shot(
+                    shot_info_map[sid], fp, ref_images_b64, reference_image_dir
+                )
+            except Exception as e:
+                logger.warning(f"[Skill3] 补检 shot_{sid:02d} 失败: {e}")
+                cr = _default_result(sid, fp)
+                lh, trace = None, {"fallback": True}
+            results.append((cr, lh, trace))
+            continue
+
+        cr = _parse_result(sid, fp, reference_image_dir, fd)
+        lh = _parse_layout_hint(sid, fd)
+        trace = {
+            "batch_index": idx,
+            "level": cr.level.value,
+            "score": cr.score,
+            "summary": cr.summary,
+        }
+        logger.info(f"  [Skill3] batch shot_{sid:02d} → {cr.level.value} (score={cr.score:.1f}) {cr.summary[:60]}")
+        results.append((cr, lh, trace))
+
+    return results
 
 
 # ── 单 shot 检查 ──────────────────────────────────────────
