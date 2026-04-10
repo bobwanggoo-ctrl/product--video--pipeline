@@ -359,17 +359,17 @@
 									</curve>
 								</parameter>
 								<parameter name="Y" id="2" flags="8606711824">
-									<curve type="1" default="0" value="-53.458896160131779">
+									<curve type="1" default="0" value="5.5">
 										<numberOfKeypoints>4</numberOfKeypoints>
 										<keypoint flags="0">
 											<time>0 120000 1 0</time>
-											<value>-54.109999999999999</value>
+											<value>5.5</value>
 											<outputTangentTime>0.46713333339441721</outputTangentTime>
 											<outputTangentValue>0</outputTangentValue>
 										</keypoint>
 										<keypoint flags="0">
 											<time>168168 120000 1 0</time>
-											<value>-54.109999999999999</value>
+											<value>5.5</value>
 											<inputTangentTime>-0.46713333333333323</inputTangentTime>
 											<inputTangentValue>0</inputTangentValue>
 											<outputTangentTime>0.33366666666666667</outputTangentTime>
@@ -377,7 +377,7 @@
 										</keypoint>
 										<keypoint flags="128">
 											<time>592592 120000 1 0</time>
-											<value>-54.109999999999999</value>
+											<value>5.5</value>
 											<inputTangentTime>-0.46713333333333323</inputTangentTime>
 											<inputTangentValue>0</inputTangentValue>
 											<outputTangentTime>0.46713333333333323</outputTangentTime>
@@ -385,7 +385,7 @@
 										</keypoint>
 										<keypoint flags="128">
 											<time>760760 120000 1 0</time>
-											<value>-54.109999999999999</value>
+											<value>5.5</value>
 											<inputTangentTime>-0.46713333339441721</inputTangentTime>
 											<inputTangentValue>-0</inputTangentValue>
 											<outputTangentTime>0.46713333339441721</outputTangentTime>
