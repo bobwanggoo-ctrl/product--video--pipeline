@@ -1039,9 +1039,9 @@
 						<foldFlags>131072</foldFlags>
 						<parameter name="填充颜色" id="111" flags="12884906000">
 							<foldFlags>15</foldFlags>
-							<parameter name="红色" id="1" flags="12884901904" default="0.9999966025352478" value="0.0078415796160697937"/>
-							<parameter name="绿色" id="2" flags="8589934608" default="1" value="0.007844134233891964"/>
-							<parameter name="蓝色" id="3" flags="8589934608" default="1" value="0.0078410208225250244"/>
+							<parameter name="红色" id="1" flags="12884901904" default="0.9999966025352478" value="1"/>
+							<parameter name="绿色" id="2" flags="8589934608" default="1" value="0.84"/>
+							<parameter name="蓝色" id="3" flags="8589934608" default="1" value="0"/>
 						</parameter>
 					</parameter>
 					<parameter name="外框" id="108" flags="8589971472">
