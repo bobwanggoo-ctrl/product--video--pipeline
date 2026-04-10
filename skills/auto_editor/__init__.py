@@ -43,7 +43,7 @@ def run(
         output_dir: 输出目录。
         bgm_dir: BGM 库目录（按节奏类型分子文件夹）。
         font_dir: 字体库目录（如 input/fonts/）。
-        title_templates_dir: FCP Title 模板目录（可选，如 input/fcp_titles/）。
+        title_templates_dir: FCP Title 模板目录（可选，默认自动使用 assets/fcp_titles/）。
         sellpoint_text: 原始卖点文案（用于字幕提炼）。
         motion_results: Skill 4 输出的运镜结果列表（可选）。
         preferred_llm: LLM 选择。

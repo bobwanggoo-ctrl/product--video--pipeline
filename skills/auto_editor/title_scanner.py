@@ -1,6 +1,6 @@
 """FCP Title 模板扫描器。
 
-扫描 input/fcp_titles/ 中的 .moti 模板，
+扫描 assets/fcp_titles/ 中的 .moti 模板，
 提供安装到 FCP Motion Templates 目录和 FCPXML 引用的能力。
 
 FCP Motion Templates 标准安装路径：
@@ -108,7 +108,7 @@ def scan_templates(templates_dir: str = "") -> TitleTemplateLibrary:
     """扫描 FCP Title 模板目录。
 
     Args:
-        templates_dir: 模板目录路径，默认 input/fcp_titles/
+        templates_dir: 模板目录路径，默认 assets/fcp_titles/
 
     Returns:
         TitleTemplateLibrary 包含所有扫描到的模板。

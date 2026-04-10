@@ -303,7 +303,7 @@ def export_fcpxml(
                 "id": ref_id,
                 "name": tmpl.name,
                 "uid": uid,
-                "src": tmpl.installed_path.resolve().as_uri(),
+                # src 不写 — uid 已足够让 FCP 定位模板，写绝对路径会导致跨机器不兼容
             })
             logger.info(f"[FCPXML] 注册模板: {tmpl.name} → {ref_id}")
             return ref_id

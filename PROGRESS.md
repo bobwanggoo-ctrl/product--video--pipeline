@@ -90,8 +90,8 @@
 | API | 用途 | 状态 | 备注 |
 |-----|------|------|------|
 | AI导航 GROUP_ID=3 | 图像生成 (技能2) | ✅ 已配置 | 异步任务模式 |
-| AI导航 GROUP_ID=13 | Gemini-3-flash LLM + Vision | ✅ 已配置 | 技能1/3/5 共用 |
-| tu-zi (Reverse Prompt) | LLM 备选路由 | ✅ 已配置 | OpenAI 兼容接口 |
+| AI导航 GROUP_ID=13 | Gemini-3-flash LLM + Vision | ⚠️ 不稳定 | 模型厂商问题，Vision 任务不 dispatch；LLM 降级到 tu-zi |
+| tu-zi (Reverse Prompt) | LLM 主路 + Vision 主路 | ✅ 已配置 | OpenAI 兼容；Vision 双路由：gemini-3-flash-preview → gemini-2.5-flash-lite |
 | Kling AI | kling-v2-5 图生视频 (技能4) | ✅ 已配置 | JWT 认证，std模式，5s，16:9 |
 | Google Vision API | 侵权检测 (技能3) | ✅ 已配置 | Logo+Web反向搜图+IP标签，可选 |
 
@@ -110,8 +110,9 @@
 |--------|------|------|
 | P1 | 全自动模式 UI 暴露 | ✅ main.py --auto 参数已支持 |
 | P1 | Error_Keywords 闭环 | ✅ Skill 3 → Skill 2 negative prompt 已完成 |
+| P1 | FCP Title 模板集成 | ✅ assets/fcp_titles/（084 SDMAC #100-117 + Social Media Titles 10个），字幕黄色遮罩 + 场景动态模板 |
 | P2 | Amazon 链接输入 | 自动抓取商品信息 + 图片作为输入源 |
-| P2 | FCP Title 模板集成 | input/fcp_titles/ 已有 3 套模板包，可丰富 FCPXML 字幕样式 |
+| P2 | 合规检查并发优化 | 当前 MAX_WORKERS=1（顺序跑），待 LLM 稳定后改为 3（约10分钟→3分钟） |
 | P3 | 侵权检测增强 | ✅ Google Cloud Vision API 已集成（Logo + Web反向搜图 + IP标签） |
 
 ## 架构 / Architecture

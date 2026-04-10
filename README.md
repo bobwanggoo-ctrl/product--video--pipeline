@@ -118,7 +118,9 @@ output/{task_id}/
 ├── utils/                      # LLM/API 客户端, FFmpeg 封装
 ├── config/                     # 环境变量配置
 ├── tests/                      # E2E 测试 (6 文件)
-└── input/                      # 输入素材
+└── input/                      # 输入素材（素材、音乐、字体、参考图）
+assets/                         # 项目资产（纳入 git）
+└── fcp_titles/                 # FCP .moti 模板（084 SDMAC 遮罩 + Social Media Titles）
 ```
 
 ## Checkpoint 恢复
@@ -127,8 +129,9 @@ Pipeline 支持断点恢复。如果运行中断，再次启动 `python main.py`
 
 ## 关键技术决策
 
-- **LLM 路由**: AI导航优先 → tu-zi 自动降级
-- **合规检查**: Gemini Vision (质量/一致性/排版) + Google Vision API (侵权) 双层并行
+- **LLM 路由**: tu-zi 主路（AI导航 GROUP_ID=13 备用，厂商不稳定时自动降级）
+- **合规检查**: tu-zi Vision (质量/一致性/排版，双模型路由) + Google Vision API (侵权) 双层并行
+- **FCP 字幕模板**: assets/fcp_titles/，084 SDMAC 黄色遮罩 (#100-117) + Social Media Titles (10个)；同事 git clone 后自动安装到本机 Motion Templates
 - **视频分析**: FFmpeg + Storyboard，不依赖 VideoDB
 - **变速**: 1.0-2.0x 加速 only (AI 视频帧率限制)
 - **导出**: MP4 成品(字幕烧录+BGM) + 剪映/FCP (字幕/BGM 作独立轨道)
