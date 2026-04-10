@@ -29,41 +29,41 @@ STYLE_CATEGORY_MAP = {
 # Social Media Titles 各模板配置（来源：FCP 导出参照 XML）
 # position: adjust-transform position 值（百分比坐标，相对画布中心）
 # scale:    adjust-transform scale 值
-# max_lines: 模板视觉上支持的最多文字行数
+# max_lines: 固定为 1 — 文案提炼后只有一行，避免模版默认文字出现在画面中
 # title_ok: 适合作为标题使用  subtitle_ok: 适合作为字幕单行使用
 SOCIAL_MEDIA_TITLES_CONFIG: dict[str, dict] = {
     "Scene 01": {
-        "max_lines": 2, "font_size": 55, "alignment": "center",
+        "max_lines": 1, "font_size": 55, "alignment": "center",
         "scale": "1.5 1.5", "position": None,
         "title_ok": True, "subtitle_ok": False,
     },
     "Scene 02": {
-        "max_lines": 3, "font_size": 60, "alignment": "center",
+        "max_lines": 1, "font_size": 60, "alignment": "center",
         "scale": "1.4 1.4", "position": "0 5.55556",
         "title_ok": True, "subtitle_ok": False,
     },
     "Scene 03": {
-        "max_lines": 2, "font_size": 60, "alignment": "right",
+        "max_lines": 1, "font_size": 60, "alignment": "right",
         "scale": None, "position": None,
         "title_ok": True, "subtitle_ok": False,
     },
     "Scene 04": {
-        "max_lines": 2, "font_size": 55, "alignment": "center",
+        "max_lines": 1, "font_size": 55, "alignment": "center",
         "scale": "1.7 1.7", "position": None,
         "title_ok": True, "subtitle_ok": False,
     },
     "Scene 05": {
-        "max_lines": 2, "font_size": 57, "alignment": "center",
+        "max_lines": 1, "font_size": 57, "alignment": "center",
         "scale": "1.8 1.8", "position": None,
         "title_ok": True, "subtitle_ok": False,
     },
     "Scene 06": {
-        "max_lines": 3, "font_size": 58, "alignment": "left",
+        "max_lines": 1, "font_size": 58, "alignment": "left",
         "scale": "1.36 1.36", "position": "15 11.7593",
         "title_ok": True, "subtitle_ok": False,
     },
     "Scene 08": {
-        "max_lines": 2, "font_size": 60, "alignment": "left",
+        "max_lines": 1, "font_size": 60, "alignment": "left",
         "scale": "1.27 1.27", "position": "8.33333 -11.1111",
         "title_ok": True, "subtitle_ok": False,
     },
@@ -73,12 +73,12 @@ SOCIAL_MEDIA_TITLES_CONFIG: dict[str, dict] = {
         "title_ok": False, "subtitle_ok": True,
     },
     "Scene 10": {
-        "max_lines": 2, "font_size": 60, "alignment": "center",
+        "max_lines": 1, "font_size": 60, "alignment": "center",
         "scale": "1.91 1.91", "position": None,
         "title_ok": True, "subtitle_ok": False,
     },
     "Scene 12": {
-        "max_lines": 3, "font_size": 60, "alignment": "center",
+        "max_lines": 1, "font_size": 60, "alignment": "center",
         "scale": "1.37 1.37", "position": None,
         "title_ok": True, "subtitle_ok": False,
     },

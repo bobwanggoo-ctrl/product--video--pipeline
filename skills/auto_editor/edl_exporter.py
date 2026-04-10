@@ -279,31 +279,61 @@ def export_fcpxml(
         })
 
     # 字幕 effect — 优先使用自定义 .moti 模板，降级到 Essential Title
-    custom_title_ref = None
-    custom_title_name = None
+    # 规则：每个视频固定 1 个 title 模板 + 最多 2 个 selling_point 模板，不再每 clip 轮换
+    title_ref_map: dict[str, str] = {}   # style → ref_id（title/selling_point 各一个或两个）
+    title_name_map: dict[str, str] = {}  # style → template name
+    title_tmpl_map: dict[str, object] = {}  # style → TitleTemplate
+
     if title_lib and title_lib.templates:
         from .title_scanner import get_template_for_style, get_fcpxml_uid
-        # 选一个模板注册为 effect（所有字幕共用）
-        tmpl = get_template_for_style(title_lib, "title", 0)
-        if tmpl and tmpl.installed_path:
-            custom_title_ref = f"r{asset_id_counter[0]}"
-            custom_title_name = tmpl.name
-            asset_id_counter[0] += 1
-            # FCP uid 格式: ~/Titles.localized/ + 相对路径
+
+        def _register_tmpl(tmpl, ref_key: str):
+            """注册一个模板到 resources，返回 ref_id。"""
+            if not tmpl or not tmpl.installed_path:
+                return None
             fcp_titles_base = Path.home() / "Movies" / "Motion Templates.localized"
             try:
                 rel_path = tmpl.installed_path.relative_to(fcp_titles_base)
                 uid = f"~/{rel_path}"
             except ValueError:
                 uid = f"~/{tmpl.installed_path}"
-            src_uri = tmpl.installed_path.resolve().as_uri()
+            ref_id = f"r{asset_id_counter[0]}"
+            asset_id_counter[0] += 1
             ET.SubElement(resources, "effect", {
-                "id": custom_title_ref,
-                "name": custom_title_name,
+                "id": ref_id,
+                "name": tmpl.name,
                 "uid": uid,
-                "src": src_uri,
+                "src": tmpl.installed_path.resolve().as_uri(),
             })
-            logger.info(f"[FCPXML] 使用自定义 Title 模板: {custom_title_name} (uid={uid})")
+            logger.info(f"[FCPXML] 注册模板: {tmpl.name} → {ref_id}")
+            return ref_id
+
+        # 1 个 title 模板（固定 index=0）
+        t_title = get_template_for_style(title_lib, "title", 0)
+        ref = _register_tmpl(t_title, "title")
+        if ref:
+            title_ref_map["title"] = ref
+            title_name_map["title"] = t_title.name
+            title_tmpl_map["title"] = t_title
+
+        # 最多 2 个 selling_point 模板（index=0 和 index=1）
+        for idx in range(2):
+            t_sp = get_template_for_style(title_lib, "selling_point", idx)
+            if not t_sp:
+                break
+            key = f"selling_point_{idx}"
+            ref = _register_tmpl(t_sp, key)
+            if ref:
+                title_ref_map[key] = ref
+                title_name_map[key] = t_sp.name
+                title_tmpl_map[key] = t_sp
+
+    # selling_point 模板轮换计数（在 clip 循环中递增）
+    sp_counter = [0]
+
+    # 兼容旧路径：custom_title_ref 指向 title 模板
+    custom_title_ref = title_ref_map.get("title")
+    custom_title_name = title_name_map.get("title")
 
     default_title_ref = f"r{asset_id_counter[0]}"
     asset_id_counter[0] += 1
@@ -407,36 +437,30 @@ def export_fcpxml(
             font_size = "150" if is_title else "75"
 
             # 选择模板: 自定义 .moti 优先，降级 Essential Title
-            use_custom = custom_title_ref is not None
-            use_ref = custom_title_ref if use_custom else default_title_ref
-            use_name = custom_title_name if use_custom else "Essential Title"
-            tmpl = None  # 当前 clip 选中的模板，稍后可能被覆盖
+            use_custom = bool(title_ref_map)
+            tmpl = None  # 当前 clip 选中的模板
 
-            # 自定义模板可以按 clip 轮换不同模板
-            if use_custom and title_lib:
-                tmpl = get_template_for_style(title_lib, clip.subtitle_style, ts_counter - 1)
-                if tmpl and tmpl.installed_path:
-                    # 为每个不同模板注册 effect（如果尚未注册）
-                    if not hasattr(export_fcpxml, '_custom_refs'):
-                        export_fcpxml._custom_refs = {}
-                    if tmpl.name not in export_fcpxml._custom_refs:
-                        fcp_titles_base = Path.home() / "Movies" / "Motion Templates.localized"
-                        try:
-                            rel_path = tmpl.installed_path.relative_to(fcp_titles_base)
-                            uid = f"~/{rel_path}"
-                        except ValueError:
-                            uid = f"~/{tmpl.installed_path}"
-                        new_ref = f"r{asset_id_counter[0]}"
-                        asset_id_counter[0] += 1
-                        ET.SubElement(resources, "effect", {
-                            "id": new_ref,
-                            "name": tmpl.name,
-                            "uid": uid,
-                            "src": tmpl.installed_path.resolve().as_uri(),
-                        })
-                        export_fcpxml._custom_refs[tmpl.name] = new_ref
-                    use_ref = export_fcpxml._custom_refs.get(tmpl.name, use_ref)
-                    use_name = tmpl.name
+            if use_custom:
+                if clip.subtitle_style == "title":
+                    # title 固定用预选的那 1 个
+                    use_ref = title_ref_map.get("title", default_title_ref)
+                    use_name = title_name_map.get("title", "Essential Title")
+                    tmpl = title_tmpl_map.get("title")
+                else:
+                    # selling_point 在 0/1 两个预选模板间交替
+                    sp_keys = [k for k in title_ref_map if k.startswith("selling_point")]
+                    if sp_keys:
+                        key = sp_keys[sp_counter[0] % len(sp_keys)]
+                        sp_counter[0] += 1
+                        use_ref = title_ref_map[key]
+                        use_name = title_name_map[key]
+                        tmpl = title_tmpl_map[key]
+                    else:
+                        use_ref = default_title_ref
+                        use_name = "Essential Title"
+            else:
+                use_ref = default_title_ref
+                use_name = "Essential Title"
 
             title_elem = ET.SubElement(clip_elem, "title", {
                 "ref": use_ref,
