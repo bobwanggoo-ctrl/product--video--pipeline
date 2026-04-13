@@ -579,13 +579,13 @@ def _get_fcp_position(position: str, style: str) -> tuple[str, str]:
     # selling_point bottom_center 默认偏右 430（LLM 指定其他位置时走各自映射）
     if style == "selling_point":
         x_map = {
-            "top_left": "-600", "top_center": "0", "top_right": "600",
-            "bottom_left": "-600", "bottom_center": "430", "bottom_right": "600",
+            "top_left": "-560", "top_center": "0", "top_right": "560",
+            "bottom_left": "-560", "bottom_center": "430", "bottom_right": "560",
         }
     else:
         x_map = {
-            "top_left": "-600", "top_center": "0", "top_right": "600",
-            "bottom_left": "-600", "bottom_center": "0", "bottom_right": "600",
+            "top_left": "-560", "top_center": "0", "top_right": "560",
+            "bottom_left": "-560", "bottom_center": "0", "bottom_right": "560",
         }
 
     x_pos = x_map.get(position, "430" if style == "selling_point" else "0")
@@ -627,11 +627,7 @@ def _render_custom_title(
     ts_node = ET.SubElement(text_elem, "text-style", ref=ts_id)
     ts_node.text = clip.subtitle_text
     tsd = ET.SubElement(title_elem, "text-style-def", id=ts_id)
-    alignment = (
-        "left" if "left" in clip.subtitle_position
-        else "right" if "right" in clip.subtitle_position
-        else "center"
-    )
+    alignment = "center"
     style_attrs = {
         "font": "Impact",
         "fontSize": font_size,

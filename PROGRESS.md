@@ -93,7 +93,7 @@
 | AI导航 GROUP_ID=13 | Gemini-3-flash LLM + Vision | ⚠️ 不稳定 | 模型厂商问题，Vision 任务不 dispatch；LLM 降级到 tu-zi |
 | tu-zi (Reverse Prompt) | LLM 主路 + Vision 主路 | ✅ 已配置 | OpenAI 兼容；Vision 双路由：gemini-3-flash-preview → gemini-2.5-flash-lite |
 | Kling AI | kling-v2-5 图生视频 (技能4) | ✅ 已配置 | JWT 认证，std模式，5s，16:9 |
-| Google Vision API | 侵权检测 (技能3) | ✅ 已配置 | Logo+Web反向搜图+IP标签，可选 |
+| Google Vision API | 侵权检测 (技能3) | ⚠️ 不稳定 | HTTP 400 错误（Test_5 实测），不影响主流程，侵权层跳过 |
 
 **关键决策：**
 - LLM 路由：AI导航 (Gemini-3-flash) 优先 → tu-zi (Reverse Prompt) 自动降级备选
@@ -104,6 +104,43 @@
 - 输出：MP4 成品(字幕烧录+BGM) + 剪映 JSON + FCPXML v1.11（字幕/BGM 作独立轨道）
 - 合规检查：双层并行 — Gemini Vision 质量审核（产品一致性+融合度+逻辑+AI质量+排版） + Google Vision API 侵权检测（Logo+Web+IP），Error_Keywords 回传 Skill 2 negative prompt
 
+## 测试记录 / Test History
+
+| 测试 | 产品 | 日期 | Skill 1 | Skill 2 | Skill 3 (合规) | Skill 4 | Skill 5 | 备注 |
+|------|------|------|---------|---------|----------------|---------|---------|------|
+| test3 | 珐琅铸铁锅 | 2026-04-08 | ✅ | 15/15 | 未记录 | ✅ | ✅ | 早期测试 |
+| test4 | 珐琅铸铁锅 | 2026-04-09 | ✅ | 14/15 | ✅ | ✅ | ✅ | 缺 shot_01 |
+| test5 | 毕业帽玻璃罐 | 2026-04-13 | ⚠️ 重试2次 | 14/15 | PASS=9 WARN=4 FAIL=1 | 10片段 | ✅ 23s | shot_01 生图超时；WARN/FAIL 集中在手部畸形；侵权 API 400 |
+
+### Test 5 合规检查详情（2026-04-13）
+- **产品**：毕业帽玻璃收纳罐（Graduation Cap Jar）
+- **参考图**：1 张（image copy.png）
+- **检查模式**：Grid 批量，3 组并发（5+5+4 张）
+- **耗时**：约 90 秒（14 张）
+- **结果**：PASS=9, WARN=4, FAIL=1
+
+| shot | 评级 | 关键词 | 原因 |
+|------|------|--------|------|
+| 02 | WARN | incorrect flower type, smooth cap texture | 材质细节缺失，花卉种类偏移 |
+| 03 | FAIL | deformed fingers, hand anatomy error, unnatural joints | 右手肢体畸形 + 画质崩坏 |
+| 06 | WARN | finger joint distortion, elongated finger | 手部交互轻微 AI 瑕疵 |
+| 09 | WARN | minor hand artifact, blurred contact | 手部托举融合瑕疵 |
+| 15 | WARN | tassel position inconsistency, blurry background | 流苏方向不符，轻微 AI 幻觉 |
+
+**规律**：手部交互镜头是高风险点（4/5 问题 shot 涉及手部），建议 Skill 1 控制此类产品的手部交互镜头比例。
+
+**漏检问题（已修复）**：
+- shot_05：多个梅森瓶光影未融合场景 → Prompt 加强：多产品时逐一核查光影
+- shot_12：产品周围异常放射状光晕 → Prompt 加强：异常光效识别为 AI artifact FAIL
+- shot_14：毕业帽悬浮在瓶口上方 → Prompt 加强：部件接触面检测（附件悬空 → FAIL）
+- shot_03 字幕与背景横幅重叠 → Prompt 加强：排版前先检测画面文字/横幅/标语
+
+**字幕坐标修复（edl_exporter.py）**：
+- left/right X 值从 ±600 → ±560
+- 字幕对齐方式统一改为 center（不再跟随 position 名称变更）
+
+---
+
 ## 下一步 / Next Steps
 
 | 优先级 | 任务 | 说明 |
@@ -112,7 +149,7 @@
 | P1 | Error_Keywords 闭环 | ✅ Skill 3 → Skill 2 negative prompt 已完成 |
 | P1 | FCP Title 模板集成 | ✅ assets/fcp_titles/（084 SDMAC #100-117 + Social Media Titles 10个），字幕黄色遮罩 + 场景动态模板 |
 | P2 | Amazon 链接输入 | 自动抓取商品信息 + 图片作为输入源 |
-| P2 | 合规检查并发优化 | 当前 MAX_WORKERS=1（顺序跑），待 LLM 稳定后改为 3（约10分钟→3分钟） |
+| P2 | 合规检查并发优化 | ✅ MAX_WORKERS=3，5张/组 Grid 批量，3组并发（Test_5 实测 ~90s 完成 14 张） |
 | P3 | 侵权检测增强 | ✅ Google Cloud Vision API 已集成（Logo + Web反向搜图 + IP标签） |
 
 ## 架构 / Architecture
