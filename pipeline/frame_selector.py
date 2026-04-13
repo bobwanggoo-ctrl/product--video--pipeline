@@ -21,7 +21,7 @@ SHOT_TYPE_QUOTA = {
     "Wide": (2, 5),    # 至少 2 个，最多 5 个
     "Medium": (3, 6),  # 中景最多
     "Close": (1, 3),
-    "Macro": (0, 2),
+    "Macro": (0, 3),
 }
 
 # 第一批生成数量（留 buffer 给失败补拍）

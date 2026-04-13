@@ -1,11 +1,17 @@
 """Global configuration loaded from environment variables."""
 
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Project root
-ROOT_DIR = Path(__file__).resolve().parent.parent
+# Project root — handles both source and PyInstaller bundle
+if getattr(sys, "frozen", False):
+    # Running as PyInstaller bundle: write data next to the executable
+    ROOT_DIR = Path(sys.executable).parent
+else:
+    ROOT_DIR = Path(__file__).resolve().parent.parent
+
 load_dotenv(ROOT_DIR / ".env")
 
 
@@ -35,7 +41,25 @@ REVERSE_PROMPT_VISION_MODEL_FALLBACK = os.getenv("REVERSE_PROMPT_VISION_MODEL_FA
 
 # --- AI导航 (yswg) ---
 AI_NAV_BASE_URL = os.getenv("AI_NAV_BASE_URL", "http://yswg.love:15091/api/admin")
-AI_NAV_TOKEN = os.getenv("AI_NAV_TOKEN", "")
+
+def _load_nav_token() -> str:
+    """优先从 skill auth.json 读取 token（用户每次登录自动更新），
+    找不到时降级到 .env 的 AI_NAV_TOKEN。
+    这样用户只需在开发机上跑一次 /navigation-ai login，
+    所有后续 pipeline 运行自动使用最新 token，无需手动同步。
+    """
+    import json
+    auth_path = Path.home() / ".baoyu-skills" / "navigation-ai" / "auth.json"
+    if auth_path.exists():
+        try:
+            token = json.loads(auth_path.read_text(encoding="utf-8")).get("token", "")
+            if token:
+                return token
+        except Exception:
+            pass
+    return os.getenv("AI_NAV_TOKEN", "")
+
+AI_NAV_TOKEN = _load_nav_token()
 # 生图/生视频
 AI_NAV_IMAGE_APP_ID = os.getenv("AI_NAV_IMAGE_APP_ID", "2038805674553368579")
 AI_NAV_IMAGE_GROUP_ID = os.getenv("AI_NAV_IMAGE_GROUP_ID", "1")

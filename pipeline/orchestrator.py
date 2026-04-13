@@ -368,40 +368,53 @@ class PipelineOrchestrator:
 
     # ── run_all: 全流程串联 ─────────────────────────────
 
-    def run_all(self, initial_input: dict, run_dirs: dict) -> dict:
+    def run_all(self, initial_input: dict, run_dirs: dict, on_progress=None, should_stop=None) -> dict:
         """Run the full pipeline, chaining data between steps.
-
-        Semi-auto mode pauses after each step for user confirmation.
-        Supports checkpoint resume — skips already completed steps.
 
         Args:
             initial_input: {sellpoint_text, reference_image_dir, bgm_dir}
             run_dirs: from config.settings.create_run_dirs()
+            on_progress: optional callable(step_name, status, detail)
+            should_stop: optional callable() -> bool  — checked between steps
         """
         self._initial_input = initial_input
         self._run_dirs = run_dirs
+        self._on_progress = on_progress
 
         for step in self.STEP_ORDER:
+            # Check stop signal between steps
+            if should_stop and should_stop():
+                logger.info("[Pipeline] 收到停止信号，保存进度并退出")
+                self.state.save(run_dirs["checkpoint"])
+                return {"aborted": True, "output_dir": str(run_dirs["root"])}
+
             step_state = self.state.steps[step.value]
 
             # Skip completed / skipped steps (checkpoint resume)
             if step_state.status in (StepStatus.COMPLETED, StepStatus.SKIPPED):
                 logger.info(f"[Pipeline] 跳过已完成步骤: {step.value}")
+                if on_progress:
+                    on_progress(step.value, "skipped", "")
                 continue
 
             input_data = self._build_step_input(step)
+
+            if on_progress:
+                on_progress(step.value, "started", "")
 
             try:
                 result = self.run_step(step, input_data)
             except Exception as e:
                 logger.error(f"[Pipeline] {step.value} 失败: {e}")
+                if on_progress:
+                    on_progress(step.value, "failed", str(e))
                 self.state.save(run_dirs["checkpoint"])
                 if self.state.mode == "semi_auto":
                     action = self._handle_failure(step, e)
                     if action == "retry":
                         step_state.status = StepStatus.PENDING
                         self.state.save(run_dirs["checkpoint"])
-                        return self.run_all(initial_input, run_dirs)
+                        return self.run_all(initial_input, run_dirs, on_progress, should_stop)
                     elif action == "skip" and step == PipelineStep.COMPLIANCE_CHECK:
                         step_state.status = StepStatus.SKIPPED
                         continue
@@ -415,13 +428,16 @@ class PipelineOrchestrator:
                     step_state.status = StepStatus.PENDING
                     step_state.output_data = None
                     self.state.save(run_dirs["checkpoint"])
-                    return self.run_all(initial_input, run_dirs)
+                    return self.run_all(initial_input, run_dirs, on_progress, should_stop)
                 elif action == "quit":
                     self.state.save(run_dirs["checkpoint"])
                     print(f"\n进度已保存: {run_dirs['checkpoint']}")
                     return {"aborted": True}
                 else:
                     self.confirm_step(step)
+
+            if on_progress:
+                on_progress(step.value, "completed", "")
 
             # Save checkpoint after each step
             self.state.save(run_dirs["checkpoint"])

@@ -17,6 +17,7 @@ from config import settings
 from config.settings import create_run_dirs
 from pipeline.orchestrator import PipelineOrchestrator, PipelineState
 
+settings.LOGS_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -113,8 +114,6 @@ def main():
     args = parser.parse_args()
 
     mode = "full_auto" if args.auto else "semi_auto"
-
-    settings.LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
     print("\n=== Product Video Pipeline ===")
     print(f"模式: {'全自动' if args.auto else '半自动'}\n")
