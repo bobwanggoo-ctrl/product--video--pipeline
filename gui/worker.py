@@ -23,7 +23,7 @@ class PipelineWorker(QThread):
     progress       = Signal(str, str, str)
     log            = Signal(str)
     run_dirs_ready = Signal(str)   # output root path, for Files button
-    finished       = Signal(dict)
+    pipeline_done  = Signal(dict)   # renamed: avoids shadowing QThread.finished
     error          = Signal(str)
 
     def __init__(self, sellpoint_text: str, image_paths: list[str]):
@@ -41,7 +41,7 @@ class PipelineWorker(QThread):
         root_logger.addHandler(handler)
         try:
             result = self._run_pipeline()
-            self.finished.emit(result)
+            self.pipeline_done.emit(result)
         except Exception as exc:
             self.error.emit(str(exc))
         finally:

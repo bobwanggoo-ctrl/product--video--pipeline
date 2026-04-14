@@ -1414,7 +1414,7 @@ class MainWindow(QMainWindow):
         if not (0 <= task_idx < len(self._tasks)):
             return
         task = self._tasks[task_idx]
-        task.worker = None
+        # task.worker cleared by QThread.finished → avoids GC while thread runs
         task.mp4_path   = result.get("mp4", "")
         task.output_dir = result.get("output_dir", task.output_dir)
         if result.get("aborted"):
@@ -1436,7 +1436,7 @@ class MainWindow(QMainWindow):
     def _on_task_error(self, task_idx: int, message: str):
         if not (0 <= task_idx < len(self._tasks)):
             return
-        self._tasks[task_idx].worker = None
+        # task.worker cleared by QThread.finished → avoids GC while thread runs
         if task_idx == self._current_idx:
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
@@ -1569,10 +1569,13 @@ class MainWindow(QMainWindow):
             lambda msg, i=task_idx: self._on_task_log(i, msg))
         worker.run_dirs_ready.connect(
             lambda od, i=task_idx: self._on_task_run_dirs(i, od))
-        worker.finished.connect(
+        worker.pipeline_done.connect(
             lambda r, i=task_idx: self._on_task_finished(i, r))
         worker.error.connect(
             lambda msg, i=task_idx: self._on_task_error(i, msg))
+        # QThread.finished fires AFTER run() returns — safe point to release Python ref
+        worker.finished.connect(
+            lambda t=task: setattr(t, 'worker', None))
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
