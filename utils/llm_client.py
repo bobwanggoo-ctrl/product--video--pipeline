@@ -1,6 +1,7 @@
 """Unified LLM client.
 
-路由优先级: AI导航 (GROUP_ID=13) → Reverse Prompt (tu-zi) 备选
+路由优先级（文本 & Vision 均一致）:
+  AI导航 (GROUP_ID=13) → 最多重试 3 次 → Reverse Prompt (tu-zi) 兜底
 """
 
 import json
@@ -15,15 +16,20 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+# AI导航重试策略
+_AINAV_MAX_ATTEMPTS = 3          # 最多尝试 3 次
+_AINAV_RETRY_DELAYS = [3.0, 6.0] # 第2、3次前的等待秒数
+
 
 class LLMClient:
     """Unified LLM interface.
 
-    路由:
-    - ai_nav: AI导航 Gemini-3-flash (GROUP_ID=13)，异步任务模式
-    - reverse_prompt / tuzi: tu-zi 中转 OpenAI 兼��接口（备选）
-    - auto: AI导航优先 → tu-zi 备选
+    路由（文本 & Vision 均相同）:
+    1. AI导航 Gemini-3-flash (GROUP_ID=13) — 主路，最多重试 3 次
+    2. Reverse Prompt (tu-zi) — 兜底，仅在 AI导航 全部重试耗尽后启用
     """
+
+    # ── 公开接口 ──────────────────────────────────────
 
     def call(
         self,
@@ -31,36 +37,45 @@ class LLMClient:
         user_message: str,
         *,
         preferred_llm: Optional[str] = None,
-        preferred_route: Optional[str] = None,
+        preferred_route: Optional[str] = None,  # 保留兼容
         temperature: float = 0.3,
         max_tokens: int = 8192,
         json_mode: bool = True,
     ) -> str:
-        """Call LLM and return raw text response.
+        """Call LLM (text only) and return raw text response.
 
         Args:
-            preferred_llm: 'ai_nav' | 'reverse_prompt' | 'tuzi' | None (auto)
-            preferred_route: 保留兼容，暂不使用
+            preferred_llm: 'ai_nav' 强制用AI导航 | 'reverse_prompt'/'tuzi' 强制用tu-zi | None 自动
         """
         choice = (preferred_llm or "").strip().lower()
 
-        if choice in ("ai_nav", "ainav"):
-            return self._call_ai_nav(system_prompt, user_message, temperature, max_tokens, json_mode)
         if choice in ("reverse", "reverse_prompt", "tuzi"):
-            return self._call_reverse_prompt(system_prompt, user_message, temperature, max_tokens, json_mode)
+            return self._call_reverse_prompt(
+                system_prompt, user_message, temperature, max_tokens, json_mode
+            )
 
-        # Auto: AI导航优先 → tu-zi 备选
+        # AI导航优先（包含 choice=="ai_nav" 和 auto 两种情况）
         if settings.AI_NAV_TOKEN:
             try:
-                return self._call_ai_nav(system_prompt, user_message, temperature, max_tokens, json_mode)
+                return self._call_ai_nav_with_retry(
+                    system_prompt, user_message, temperature, max_tokens, json_mode
+                )
             except Exception as e:
-                logger.warning(f"[LLM] AI导航调用失败，降级到 tu-zi: {e}")
+                if choice in ("ai_nav", "ainav"):
+                    raise  # 显式指定 ai_nav → 不降级，直接报错
+                logger.warning(
+                    f"[LLM] AI导航 {_AINAV_MAX_ATTEMPTS} 次均失败，切换 tu-zi: {e}"
+                )
                 if settings.REVERSE_PROMPT_API_KEY:
-                    return self._call_reverse_prompt(system_prompt, user_message, temperature, max_tokens, json_mode)
+                    return self._call_reverse_prompt(
+                        system_prompt, user_message, temperature, max_tokens, json_mode
+                    )
                 raise
 
         if settings.REVERSE_PROMPT_API_KEY:
-            return self._call_reverse_prompt(system_prompt, user_message, temperature, max_tokens, json_mode)
+            return self._call_reverse_prompt(
+                system_prompt, user_message, temperature, max_tokens, json_mode
+            )
 
         raise ValueError("No LLM API configured. Set AI_NAV_TOKEN or REVERSE_PROMPT_API_KEY in .env")
 
@@ -72,33 +87,218 @@ class LLMClient:
         preferred_llm: Optional[str] = None,
         max_tokens: int = 4096,
     ) -> str:
-        """Call multimodal LLM with images (for compliance checking).
+        """Call multimodal LLM with images.
 
-        走 reverse_prompt (tu-zi) 优先 — 稳定支持 Vision 多图。
-        AI导航 GROUP_ID=13 备用（模型厂商不稳定时自动降级）。
+        路由优先级与 call() 一致：AI导航优先，tu-zi 兜底。
         """
-        use_reverse = (
-            preferred_llm != "ai_nav"
-            and settings.REVERSE_PROMPT_API_KEY
-        )
+        choice = (preferred_llm or "").strip().lower()
 
-        if use_reverse:
+        if choice in ("reverse", "reverse_prompt", "tuzi"):
             return self._call_reverse_prompt_vision(prompt, image_base64_list, max_tokens)
 
-        # AI导航 fallback
+        # AI导航优先
+        if settings.AI_NAV_TOKEN:
+            try:
+                return self._call_ai_nav_vision_with_retry(
+                    prompt, image_base64_list, max_tokens
+                )
+            except Exception as e:
+                if choice in ("ai_nav", "ainav"):
+                    raise
+                logger.warning(
+                    f"[Vision] AI导航 {_AINAV_MAX_ATTEMPTS} 次均失败，切换 tu-zi: {e}"
+                )
+                if settings.REVERSE_PROMPT_API_KEY:
+                    return self._call_reverse_prompt_vision(prompt, image_base64_list, max_tokens)
+                raise
+
+        if settings.REVERSE_PROMPT_API_KEY:
+            return self._call_reverse_prompt_vision(prompt, image_base64_list, max_tokens)
+
+        raise ValueError("No LLM API configured.")
+
+    # ── AI导航（含重试）────────────────────────────────
+
+    def _call_ai_nav_with_retry(
+        self,
+        system_prompt: str,
+        user_message: str,
+        temperature: float,
+        max_tokens: int,
+        json_mode: bool,
+    ) -> str:
+        """AI导航文本调用，失败时指数退避重试最多 _AINAV_MAX_ATTEMPTS 次。"""
+        last_exc: Exception | None = None
+        for attempt in range(1, _AINAV_MAX_ATTEMPTS + 1):
+            try:
+                return self._call_ai_nav(
+                    system_prompt, user_message, temperature, max_tokens, json_mode
+                )
+            except Exception as e:
+                last_exc = e
+                if attempt < _AINAV_MAX_ATTEMPTS:
+                    delay = _AINAV_RETRY_DELAYS[attempt - 1]
+                    logger.warning(
+                        f"[LLM][AiNav] attempt={attempt} 失败，{delay}s 后重试: {e}"
+                    )
+                    time.sleep(delay)
+        raise RuntimeError(
+            f"AI导航文本调用 {_AINAV_MAX_ATTEMPTS} 次全部失败: {last_exc}"
+        ) from last_exc
+
+    def _call_ai_nav_vision_with_retry(
+        self,
+        prompt: str,
+        image_base64_list: list[str],
+        max_tokens: int,
+    ) -> str:
+        """AI导航 Vision 调用，失败时指数退避重试最多 _AINAV_MAX_ATTEMPTS 次。"""
+        last_exc: Exception | None = None
+        for attempt in range(1, _AINAV_MAX_ATTEMPTS + 1):
+            try:
+                return self._call_ai_nav_vision(prompt, image_base64_list, max_tokens)
+            except Exception as e:
+                last_exc = e
+                if attempt < _AINAV_MAX_ATTEMPTS:
+                    delay = _AINAV_RETRY_DELAYS[attempt - 1]
+                    logger.warning(
+                        f"[Vision][AiNav] attempt={attempt} 失败，{delay}s 后重试: {e}"
+                    )
+                    time.sleep(delay)
+        raise RuntimeError(
+            f"AI导航 Vision 调用 {_AINAV_MAX_ATTEMPTS} 次全部失败: {last_exc}"
+        ) from last_exc
+
+    def _call_ai_nav(
+        self,
+        system_prompt: str,
+        user_message: str,
+        temperature: float,
+        max_tokens: int,
+        json_mode: bool,
+    ) -> str:
+        """单次 AI导航文本调用（params.messages 格式 + 异步轮询）。"""
         from utils.ai_nav_client import AiNavClient
+
         client = AiNavClient(purpose="llm")
-        image_urls = [f"data:image/png;base64,{img_b64}" for img_b64 in image_base64_list]
+        started_at = time.perf_counter()
+        logger.info("[LLM][START][AiNav] group=13 params.messages")
+
+        task_id = client.create_llm_task(
+            system_prompt=system_prompt,
+            user_message=user_message,
+        )
+        result = client.wait_for_task(task_id, timeout=180.0)
+
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.info(f"[LLM][END][AiNav] elapsed_ms={elapsed_ms}")
+
+        text = result.get("result_text", "")
+        if not text:
+            raise ValueError(f"AI导航返回空结果: {result}")
+
+        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text).strip()
+
+    def _call_ai_nav_vision(
+        self,
+        prompt: str,
+        image_base64_list: list[str],
+        max_tokens: int,
+    ) -> str:
+        """单次 AI导航 Vision 调用（multimodal messages 格式 + 异步轮询）。"""
+        from utils.ai_nav_client import AiNavClient
+
+        client = AiNavClient(purpose="llm")
+        started_at = time.perf_counter()
+        logger.info(f"[Vision][START][AiNav] images={len(image_base64_list)}")
+
+        image_urls = [
+            f"data:image/jpeg;base64,{img}" for img in image_base64_list
+        ]
         task_id = client.create_llm_task(
             system_prompt="",
             user_message=prompt,
             image_urls=image_urls,
         )
         result = client.wait_for_task(task_id, timeout=180.0)
+
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.info(f"[Vision][END][AiNav] elapsed_ms={elapsed_ms}")
+
         text = result.get("result_text", "")
         if not text:
-            raise ValueError(f"Vision 返回空结果: {result}")
-        return text
+            raise ValueError(f"AI导航 Vision 返回空结果: {result}")
+
+        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text).strip()
+
+    # ── Reverse Prompt / tu-zi（兜底）──────────────────
+
+    def _call_reverse_prompt(
+        self,
+        system_prompt: str,
+        user_message: str,
+        temperature: float,
+        max_tokens: int,
+        json_mode: bool,
+    ) -> str:
+        """Call Reverse Prompt (tu-zi) OpenAI-compatible API（文本）。"""
+        base_url = settings.REVERSE_PROMPT_BASE_URL.rstrip("/")
+        url = f"{base_url}{settings.REVERSE_PROMPT_PATH}"
+        model = settings.REVERSE_PROMPT_MODEL
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.REVERSE_PROMPT_API_KEY}",
+        }
+        payload: dict = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        started_at = time.perf_counter()
+        logger.info(f"[LLM][START][TuZi] model={model}")
+
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=(10, 300))
+                resp.raise_for_status()
+                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                logger.info(f"[LLM][END][TuZi] model={model} elapsed_ms={elapsed_ms} attempt={attempt}")
+                break
+            except requests.exceptions.RequestException as e:
+                last_exc = e
+                retryable = isinstance(
+                    e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
+                ) or (
+                    hasattr(e, "response")
+                    and e.response is not None
+                    and e.response.status_code in (429, 503)
+                )
+                if retryable and attempt < 3:
+                    delay = 1.5 * (2 ** (attempt - 1))
+                    logger.warning(f"[LLM][RETRY][TuZi] attempt={attempt} sleep={delay:.1f}s")
+                    time.sleep(delay)
+                    continue
+                raise RuntimeError(f"TuZi request failed: {e}") from e
+        else:
+            raise RuntimeError(f"TuZi request failed after retries: {last_exc}")
+
+        data = resp.json()
+        choices = data.get("choices", [])
+        if not choices:
+            raise ValueError(f"No choices in TuZi response: {data}")
+        content = (choices[0].get("message") or {}).get("content", "").strip()
+        if not content:
+            raise ValueError(f"Empty TuZi response: {data}")
+        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', content)
 
     def _call_reverse_prompt_vision(
         self,
@@ -106,14 +306,13 @@ class LLMClient:
         image_base64_list: list[str],
         max_tokens: int = 4096,
     ) -> str:
-        """Call tu-zi Vision via OpenAI-compatible multimodal messages.
+        """Call tu-zi Vision（图文混合，兜底路线）。
 
-        主路：REVERSE_PROMPT_VISION_MODEL（gemini-3-flash-preview）
-        备路：REVERSE_PROMPT_VISION_MODEL_FALLBACK（gemini-2.5-flash-lite），主路超时后自动降级。
+        主路：REVERSE_PROMPT_VISION_MODEL
+        备路：REVERSE_PROMPT_VISION_MODEL_FALLBACK（主路超时后自动降级）
         """
         base_url = settings.REVERSE_PROMPT_BASE_URL.rstrip("/")
-        path = "/chat/completions"
-        url = f"{base_url}{path}"
+        url = f"{base_url}/chat/completions"
 
         content: list = [{"type": "text", "text": prompt}]
         for img_b64 in image_base64_list:
@@ -132,7 +331,7 @@ class LLMClient:
         if fallback and fallback != settings.REVERSE_PROMPT_VISION_MODEL:
             models_to_try.append(fallback)
 
-        last_exc = None
+        last_exc: Exception | None = None
         for model_idx, model in enumerate(models_to_try):
             payload = {
                 "model": model,
@@ -140,127 +339,38 @@ class LLMClient:
                 "max_tokens": max_tokens,
             }
             started_at = time.perf_counter()
-            logger.info(f"[Vision][START][ReversePrompt] model={model} images={len(image_base64_list)}")
+            logger.info(f"[Vision][START][TuZi] model={model} images={len(image_base64_list)}")
 
-            for attempt in range(1, 3):  # 每个模型最多重试 2 次
+            for attempt in range(1, 3):
                 try:
                     resp = requests.post(url, headers=headers, json=payload, timeout=(10, 120))
                     resp.raise_for_status()
                     elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-                    logger.info(f"[Vision][END][ReversePrompt] model={model} elapsed_ms={elapsed_ms}")
+                    logger.info(f"[Vision][END][TuZi] model={model} elapsed_ms={elapsed_ms}")
                     data = resp.json()
                     text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                     if not text:
                         raise ValueError(f"Vision 返回空结果: {data}")
-                    return text
+                    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text).strip()
                 except requests.exceptions.RequestException as e:
                     last_exc = e
-                    is_retryable = isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
-                    if is_retryable and attempt < 2:
-                        logger.warning(f"[Vision][RETRY][ReversePrompt] model={model} attempt={attempt}")
+                    retryable = isinstance(
+                        e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
+                    )
+                    if retryable and attempt < 2:
+                        logger.warning(f"[Vision][RETRY][TuZi] model={model} attempt={attempt}")
                         time.sleep(2.0)
                         continue
-                    # 超时/连接错 → 换下一个模型
-                    if is_retryable and model_idx < len(models_to_try) - 1:
-                        logger.warning(f"[Vision][FALLBACK] {model} 超时，切换到 {models_to_try[model_idx + 1]}")
+                    if retryable and model_idx < len(models_to_try) - 1:
+                        logger.warning(
+                            f"[Vision][FALLBACK][TuZi] {model} 超时，切换 {models_to_try[model_idx + 1]}"
+                        )
                     break
                 except Exception as e:
                     last_exc = e
                     break
 
-        raise RuntimeError(f"Vision 所有模型均失败: {last_exc}")
-
-    # ── AI导航 (���步任务) ────────────────────────────
-
-    def _call_ai_nav(
-        self, system_prompt: str, user_message: str,
-        temperature: float, max_tokens: int, json_mode: bool,
-    ) -> str:
-        """Call Gemini-3-flash via AI导航 GROUP_ID=13 异步任务，messages 格式。"""
-        from utils.ai_nav_client import AiNavClient
-
-        client = AiNavClient(purpose="llm")
-
-        started_at = time.perf_counter()
-        logger.info("[LLM][START][AiNav] Gemini-3-flash via AI导航")
-
-        task_id = client.create_llm_task(
-            system_prompt=system_prompt,
-            user_message=user_message,
-        )
-        result = client.wait_for_task(task_id, timeout=180.0)
-
-        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-        logger.info(f"[LLM][END][AiNav] elapsed_ms={elapsed_ms} duration_ms={result.get('duration_ms', 0)}")
-
-        text = result.get("result_text", "")
-        if not text:
-            raise ValueError(f"AI导航返回空结果: {result}")
-
-        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text).strip()
-
-    # ── Reverse Prompt (tu-zi) ──────────────────────
-
-    def _call_reverse_prompt(
-        self, system_prompt: str, user_message: str,
-        temperature: float, max_tokens: int, json_mode: bool,
-    ) -> str:
-        """Call Reverse Prompt (tu-zi) OpenAI-compatible API."""
-        base_url = settings.REVERSE_PROMPT_BASE_URL.rstrip("/")
-        path = settings.REVERSE_PROMPT_PATH
-        model = settings.REVERSE_PROMPT_MODEL
-        url = f"{base_url}{path}"
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {settings.REVERSE_PROMPT_API_KEY}",
-        }
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        if json_mode:
-            payload["response_format"] = {"type": "json_object"}
-
-        started_at = time.perf_counter()
-        logger.info(f"[LLM][START][ReversePrompt] model={model} url={url}")
-
-        last_exc = None
-        for attempt in range(1, 4):
-            try:
-                resp = requests.post(url, headers=headers, json=payload, timeout=(10, 300))
-                resp.raise_for_status()
-                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-                logger.info(f"[LLM][END][ReversePrompt] model={model} elapsed_ms={elapsed_ms} attempt={attempt}")
-                break
-            except requests.exceptions.RequestException as e:
-                last_exc = e
-                is_retryable = (
-                    isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
-                    or (hasattr(e, "response") and e.response is not None and e.response.status_code in (429, 503))
-                )
-                if is_retryable and attempt < 3:
-                    sleep_sec = 1.5 * (2 ** (attempt - 1))
-                    logger.warning(f"[LLM][RETRY][ReversePrompt] attempt={attempt} sleep={sleep_sec:.1f}s")
-                    time.sleep(sleep_sec)
-                    continue
-                raise RuntimeError(f"ReversePrompt request failed: {e}") from e
-        else:
-            raise RuntimeError(f"ReversePrompt request failed after retries: {last_exc}")
-
-        data = resp.json()
-        choices = data.get("choices", [])
-        if not choices:
-            raise ValueError(f"No choices in response: {data}")
-        content = (choices[0].get("message") or {}).get("content", "").strip()
-        if not content:
-            raise ValueError(f"Empty content in response: {data}")
-        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', content)
+        raise RuntimeError(f"TuZi Vision 所有模型均失败: {last_exc}")
 
 
 # Singleton

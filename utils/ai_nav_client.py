@@ -3,6 +3,7 @@
 支持：上传图片、创建异步生图任务、轮询任务状态。
 """
 
+import json
 import logging
 import time
 from pathlib import Path
@@ -152,15 +153,15 @@ class AiNavClient:
         *,
         image_urls: list[str] | None = None,
     ) -> str:
-        """创建异步 LLM 任务（GROUP_ID=13），使用 messages 格式。
+        """创建异步 LLM 任务（group=13，params.messages 格式）。
 
-        Args:
-            system_prompt: 系统提示词。
-            user_message: 用户消息（纯文本）。
-            image_urls: 图片 URL/base64 列表（Vision 模式，可选）。
+        官方格式：POST /web/ai/invoke/tasks
+        Body: {appId, groupId, params: {messages: [...]}}
+
+        图文混合时 messages 使用 OpenAI multimodal content 格式。
 
         Returns:
-            任务 ID（字符串）。
+            任务 ID 字符串，供 wait_for_task() 轮询。
         """
         url = f"{self.base_url}/web/ai/invoke/tasks"
 
@@ -169,8 +170,7 @@ class AiNavClient:
             messages.append({"role": "system", "content": system_prompt})
 
         if image_urls:
-            # Vision 模式：user content 是数组，包含文本 + 图片
-            content_parts = [{"type": "text", "text": user_message}]
+            content_parts: list = [{"type": "text", "text": user_message}]
             for img_url in image_urls:
                 content_parts.append({
                     "type": "image_url",
@@ -181,14 +181,14 @@ class AiNavClient:
             messages.append({"role": "user", "content": user_message})
 
         payload = {
-            "appId": self.app_id,
-            "groupId": self.group_id,
-            "params": {
-                "messages": messages,
-            },
+            "appId":   settings.AI_NAV_LLM_APP_ID,
+            "groupId": settings.AI_NAV_LLM_GROUP_ID,
+            "params":  {"messages": messages},
         }
 
-        logger.info(f"[AiNav] 创建 LLM 任务: user={user_message[:50]}... images={len(image_urls or [])}")
+        logger.info(
+            f"[AiNav] 创建 LLM 任务: user={user_message[:50]}... images={len(image_urls or [])}"
+        )
         return self._submit_task(url, payload)
 
     def _submit_task(self, url: str, payload: dict) -> str:
@@ -255,15 +255,21 @@ class AiNavClient:
         result_text = ""
         response_json = task_data.get("responseJson") or {}
 
-        # 格式 1: LLM 返回 — OpenAI choices 格式
-        choices = response_json.get("choices", [])
-        if choices:
-            msg = (choices[0].get("message") or {}) if isinstance(choices[0], dict) else {}
-            result_text = msg.get("content", "")
+        # 格式 1: LLM 返回 — responseJson.data 是字符串
+        raw_data = response_json.get("data")
+        if isinstance(raw_data, str) and raw_data:
+            result_text = raw_data
 
-        # 格式 2: 生图返回 — data 数组格式
+        # 格式 2: LLM 返回 — OpenAI choices 格式（兼容旧路由）
         if not result_text:
-            for item in response_json.get("data", []):
+            choices = response_json.get("choices", [])
+            if choices:
+                msg = (choices[0].get("message") or {}) if isinstance(choices[0], dict) else {}
+                result_text = msg.get("content", "")
+
+        # 格式 3: 生图返回 — data 数组格式（含 url）
+        if not result_text:
+            for item in response_json.get("data", []) if isinstance(raw_data, list) else []:
                 if isinstance(item, dict):
                     if item.get("url"):
                         result_urls.append(item["url"])
@@ -272,7 +278,7 @@ class AiNavClient:
                 elif isinstance(item, str):
                     result_text += item
 
-        # 兜底：responseJson 本身可能是文本
+        # 兜底
         if not result_urls and not result_text:
             raw = response_json.get("text") or response_json.get("content") or ""
             if isinstance(raw, str):
@@ -297,7 +303,7 @@ class AiNavClient:
         task_id: str,
         *,
         poll_interval: float = 3.0,
-        timeout: float = 120.0,
+        timeout: float = 180.0,
     ) -> dict:
         """轮询等待任务完成。
 
