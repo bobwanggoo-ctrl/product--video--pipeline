@@ -2,19 +2,32 @@
 
 import json
 import subprocess
+import sys
 from pathlib import Path
+
+
+def _bundled(name: str) -> str:
+    """Return path to bundled ffmpeg/ffprobe when running as PyInstaller exe,
+    otherwise return the bare command name (relies on PATH)."""
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+        win_name = f"{name}.exe"
+        for candidate in (exe_dir / win_name, exe_dir / name):
+            if candidate.exists():
+                return str(candidate)
+    return name
 
 
 def run_ffmpeg(args: list[str], *, timeout: int = 300) -> subprocess.CompletedProcess:
     """Execute ffmpeg command, raise on failure."""
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"] + args
+    cmd = [_bundled("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error"] + args
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=True)
 
 
 def run_ffprobe_json(file_path: str) -> dict:
     """Get media info via ffprobe, return JSON dict."""
     cmd = [
-        "ffprobe", "-v", "quiet",
+        _bundled("ffprobe"), "-v", "quiet",
         "-print_format", "json",
         "-show_format", "-show_streams",
         str(file_path),
