@@ -84,13 +84,16 @@ def export_jianying_draft(
         bgm_seg.add_fade("0s", int(timeline.bgm_fade_out_sec * SEC))
         script.add_segment(bgm_seg)
 
-    # ── 字幕文本轨道 ──
-    if any(clip.subtitle_text for clip in timeline.clips):
+    # ── 字幕文本轨道（剪映用中文字幕，回退到英文）──
+    has_subtitle = any(clip.subtitle_text_cn or clip.subtitle_text for clip in timeline.clips)
+    if has_subtitle:
         script.add_track(jy.TrackType.text)
         current_t = 0.0
         for clip in timeline.clips:
             duration = clip.display_duration
-            if clip.subtitle_text:
+            # 优先英文字幕，回退中文
+            subtitle = clip.subtitle_text or clip.subtitle_text_cn
+            if subtitle:
                 is_title = clip.subtitle_style == "title"
                 style = jy.text_segment.TextStyle(
                     size=10.0 if is_title else 7.0,
@@ -99,7 +102,7 @@ def export_jianying_draft(
                 )
                 border = jy.text_segment.TextBorder(color=(0.0, 0.0, 0.0), width=0.08)
                 text_seg = jy.TextSegment(
-                    clip.subtitle_text,
+                    subtitle,
                     _tr(current_t, duration),
                     style=style,
                     border=border,
@@ -110,9 +113,152 @@ def export_jianying_draft(
 
     script.save()
 
-    draft_path = str(out_dir / draft_name)
+    draft_path = Path(out_dir / draft_name)
+    _finalize_draft(draft_path)
+
     logger.info(f"剪映草稿导出完成: {draft_path}")
-    return draft_path
+    return str(draft_path)
+
+
+# 剪映读取的字段名是 draft_info.json（即使明文也行）
+_DRAFT_INFO_FILENAME = "draft_info.json"
+
+# 真实草稿缺少但剪映需要的默认字段
+_REQUIRED_EXTRA_FIELDS = {
+    "draft_type":                    "video",
+    "is_drop_frame_timecode":        False,
+    "lyrics_effects":                [],
+    "function_assistant_info":       {},
+    "smart_ads_info":                {},
+    "uneven_animation_template_info":{},
+}
+
+
+def _finalize_draft(draft_path: Path) -> None:
+    """后处理：复制媒体到 Resources/，补全缺失字段，写成 draft_info.json。
+
+    剪映专业版 6+ 通过 root_meta_info.json 的 draft_json_file 字段
+    定位草稿入口；该字段指向 draft_info.json。明文 JSON 亦可读取，
+    只需文件名正确且字段完整。
+    """
+    import json, shutil
+
+    content_file = draft_path / "draft_content.json"
+    if not content_file.exists():
+        return
+
+    content = json.loads(content_file.read_text(encoding="utf-8"))
+
+    # ── 1. 复制媒体到 Resources/ 并更新路径 ──
+    resources_dir = draft_path / "Resources"
+    resources_dir.mkdir(exist_ok=True)
+
+    for mat_type in ("videos", "audios"):
+        for mat in content.get("materials", {}).get(mat_type, []):
+            src_str = mat.get("path", "")
+            if not src_str:
+                continue
+            src = Path(src_str)
+            if not src.exists():
+                logger.warning(f"[剪映草稿] 媒体文件不存在，跳过: {src}")
+                continue
+            dst = resources_dir / src.name
+            if not dst.exists():
+                shutil.copy2(src, dst)
+            mat["path"] = str(dst)
+
+    # ── 2. 补全剪映要求的缺失字段 ──
+    for key, default in _REQUIRED_EXTRA_FIELDS.items():
+        if key not in content:
+            content[key] = default
+
+    content["path"] = str(draft_path)
+
+    serialized = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+
+    # ── 3. 写 draft_info.json（剪映真正读取的入口文件）──
+    (draft_path / _DRAFT_INFO_FILENAME).write_text(serialized, encoding="utf-8")
+    # 保留 draft_content.json 作备份
+    content_file.write_text(serialized, encoding="utf-8")
+
+
+def install_to_jianying(draft_path: str) -> str | None:
+    """将已生成的草稿安装到剪映专业版草稿目录并注册。
+
+    自动找到 ~/Movies/JianyingPro 草稿目录，复制草稿文件夹，
+    更新媒体路径，在 root_meta_info.json 注册，剪映重启后即可看到。
+
+    Returns:
+        安装后的草稿目录路径，失败时返回 None。
+    """
+    import json, shutil, time, uuid
+
+    src = Path(draft_path)
+    if not src.exists():
+        logger.error(f"草稿路径不存在: {draft_path}")
+        return None
+
+    # 找 JianyingPro 草稿目录
+    jy_root = Path.home() / "Movies/JianyingPro/User Data/Projects/com.lveditor.draft"
+    if not jy_root.exists():
+        logger.error(f"找不到剪映草稿目录: {jy_root}")
+        return None
+
+    dst = jy_root / src.name
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+
+    # 路径重映射：把 src 内的绝对路径前缀替换为 dst 内的路径
+    info_file = dst / _DRAFT_INFO_FILENAME
+    if info_file.exists():
+        content = json.loads(info_file.read_text(encoding="utf-8"))
+        src_str, dst_str = str(src), str(dst)
+        for mat_type in ("videos", "audios"):
+            for mat in content.get("materials", {}).get(mat_type, []):
+                p = mat.get("path", "")
+                if p.startswith(src_str):
+                    mat["path"] = dst_str + p[len(src_str):]
+        content["path"] = str(dst)
+        serialized = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+        info_file.write_text(serialized, encoding="utf-8")
+
+    # 注册到 root_meta_info.json
+    root_meta_path = jy_root / "root_meta_info.json"
+    try:
+        root_meta = json.loads(root_meta_path.read_text(encoding="utf-8"))
+        tmpl = root_meta["all_draft_store"][0] if root_meta.get("all_draft_store") else {}
+        new_id = str(uuid.uuid4()).upper()
+        ts = int(time.time() * 1_000_000)
+        new_entry = {k: v for k, v in tmpl.items()}
+        new_entry.update({
+            "draft_id":          new_id,
+            "draft_name":        src.name,
+            "draft_fold_path":   str(dst),
+            "draft_json_file":   str(dst / _DRAFT_INFO_FILENAME),
+            "draft_cover":       "",
+            "tm_draft_create":   ts,
+            "tm_draft_modified": ts,
+            "tm_draft_removed":  0,
+            "tm_duration":       0,
+        })
+        # 去重：移除同名旧记录
+        root_meta["all_draft_store"] = [
+            e for e in root_meta["all_draft_store"]
+            if e.get("draft_name") != src.name
+        ]
+        root_meta["all_draft_store"].insert(0, new_entry)
+        root_meta["draft_ids"] = int(root_meta.get("draft_ids", 0)) + 1
+        shutil.copy2(root_meta_path, str(root_meta_path) + ".bak")
+        root_meta_path.write_text(
+            json.dumps(root_meta, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        logger.info(f"[剪映] 草稿已安装: {dst}")
+    except Exception as e:
+        logger.warning(f"[剪映] root_meta_info.json 更新失败（草稿文件夹已复制）: {e}")
+
+    return str(dst)
 
 
 def _export_reference_json(timeline: EditingTimeline, output_path: str) -> str:
@@ -606,3 +752,223 @@ def _render_custom_title(
         style_attrs["shadowColor"] = "0 0 0 0.75"
         style_attrs["shadowOffset"] = "3 315"
     ET.SubElement(tsd, "text-style", style_attrs)
+
+
+# ── Premiere / FCP7 XML 导出 ───────────────────────────────────
+
+def export_premiere_xml(
+    timeline: EditingTimeline,
+    output_path: str,
+    task_name: str = "",
+) -> str:
+    """导出 FCP7 格式 XML 工程文件（Premiere Pro / DaVinci Resolve 通用）。
+
+    可直接通过 Premiere「文件 → 导入 → 序列 XML」导入，
+    包含：视频轨（trim + 变速 + 转场）、BGM 音频轨。
+    字幕另附 SRT 文件，不包含在此 XML 中。
+
+    时间单位：帧（frame_count = seconds × fps，四舍五入到帧边界）。
+    """
+    import xml.etree.ElementTree as ET
+
+    fps     = timeline.fps
+    fps_int = max(1, int(round(fps)))
+    ntsc    = "TRUE" if abs(fps - 29.97) < 0.1 or abs(fps - 23.976) < 0.01 else "FALSE"
+
+    def _frames(seconds: float) -> int:
+        return max(0, round(seconds * fps))
+
+    def _rate_elem(parent):
+        r = ET.SubElement(parent, "rate")
+        ET.SubElement(r, "timebase").text = str(fps_int)
+        ET.SubElement(r, "ntsc").text = ntsc
+        return r
+
+    # ── xmeml root ──
+    xmeml = ET.Element("xmeml", version="4")
+    project = ET.SubElement(xmeml, "project")
+    ET.SubElement(project, "name").text = task_name or "Product Video"
+
+    children = ET.SubElement(project, "children")
+    sequence = ET.SubElement(children, "sequence")
+    ET.SubElement(sequence, "name").text = task_name or "Sequence"
+    ET.SubElement(sequence, "duration").text = str(_frames(timeline.total_duration))
+    _rate_elem(sequence)
+    ET.SubElement(sequence, "in").text = "-1"
+    ET.SubElement(sequence, "out").text = "-1"
+
+    # ── canvas settings ──
+    res_parts = timeline.resolution.split("x")
+    width  = res_parts[0] if len(res_parts) == 2 else "1920"
+    height = res_parts[1] if len(res_parts) == 2 else "1080"
+
+    media_elem = ET.SubElement(sequence, "media")
+
+    # ── video ──────────────────────────────────────────────────
+    video_elem  = ET.SubElement(media_elem, "video")
+    fmt = ET.SubElement(video_elem, "format")
+    sc  = ET.SubElement(fmt, "samplecharacteristics")
+    _rate_elem(sc)
+    ET.SubElement(sc, "width").text  = width
+    ET.SubElement(sc, "height").text = height
+
+    track = ET.SubElement(video_elem, "track")
+
+    # track-level enabled/locked
+    ET.SubElement(track, "enabled").text = "TRUE"
+    ET.SubElement(track, "locked").text  = "FALSE"
+
+    # file id registry: path → id string (avoids duplicate <file> blocks)
+    file_id_map: dict[str, str] = {}
+    file_counter = [1]
+
+    def _file_id(path: str) -> str:
+        p = str(Path(path).resolve())
+        if p not in file_id_map:
+            file_id_map[p] = f"file{file_counter[0]}"
+            file_counter[0] += 1
+        return file_id_map[p]
+
+    def _file_elem(parent, path: str, dur_sec: float, first_use: bool):
+        """Add <file> element; full block on first use, id-only ref after."""
+        fid = _file_id(path)
+        f   = ET.SubElement(parent, "file", id=fid)
+        if not first_use:
+            return f   # just the id reference
+        resolved = str(Path(path).resolve())
+        ET.SubElement(f, "name").text    = Path(path).name
+        ET.SubElement(f, "pathurl").text = Path(resolved).as_uri()
+        _rate_elem(f)
+        ET.SubElement(f, "duration").text = str(_frames(dur_sec))
+        fmedia = ET.SubElement(f, "media")
+        fvid   = ET.SubElement(fmedia, "video")
+        fsc    = ET.SubElement(fvid, "samplecharacteristics")
+        ET.SubElement(fsc, "width").text  = width
+        ET.SubElement(fsc, "height").text = height
+        return f
+
+    # place clips onto the video track
+    timeline_pos = 0.0       # current timeline frame position (seconds)
+    seen_paths: set[str] = set()
+
+    XFADE_MAP = {
+        "dissolve": "Cross Dissolve",
+        "fade":     "Cross Dissolve",
+        "fadeblack":"Dip To Black",
+        "fadewhite":"Dip To White",
+    }
+
+    for i, clip in enumerate(timeline.clips):
+        trans_dur   = clip.transition_duration if clip.transition_out != "cut" else 0.0
+        trans_half  = trans_dur / 2.0
+        speed       = max(0.01, clip.speed_factor)
+        src_dur     = clip.trim_end - clip.trim_start
+
+        # timeline in/out (frames)
+        tl_start  = _frames(timeline_pos)
+        tl_end    = _frames(timeline_pos + clip.display_duration)
+
+        # source in/out (frames, adjusted for speed)
+        src_in  = _frames(clip.trim_start)
+        src_out = _frames(clip.trim_end)
+
+        # add handle for transition overlap
+        if i > 0 and timeline.clips[i-1].transition_out != "cut":
+            prev_trans = timeline.clips[i-1].transition_duration
+            tl_start   = _frames(timeline_pos - prev_trans / 2.0)
+            src_in     = max(0, _frames(clip.trim_start - prev_trans / 2.0))
+
+        if clip.transition_out != "cut":
+            tl_end  = _frames(timeline_pos + clip.display_duration + trans_half)
+            src_out = min(_frames(clip.trim_end + trans_half), _frames(src_dur))
+
+        resolved = str(Path(clip.source_path).resolve())
+        first_use = resolved not in seen_paths
+        seen_paths.add(resolved)
+
+        ci = ET.SubElement(track, "clipitem", id=f"clipitem-{i+1}")
+        ET.SubElement(ci, "name").text     = Path(clip.source_path).name
+        ET.SubElement(ci, "enabled").text  = "TRUE"
+        ET.SubElement(ci, "duration").text = str(_frames(src_dur))
+        _rate_elem(ci)
+        ET.SubElement(ci, "start").text    = str(tl_start)
+        ET.SubElement(ci, "end").text      = str(tl_end)
+        ET.SubElement(ci, "in").text       = str(src_in)
+        ET.SubElement(ci, "out").text      = str(src_out)
+        ET.SubElement(ci, "masterclipid").text = f"masterclip-{file_id_map.get(resolved, 'f1')}"
+
+        _file_elem(ci, clip.source_path, src_dur, first_use)
+
+        # speed change
+        if abs(speed - 1.0) > 0.01:
+            sp = ET.SubElement(ci, "speed")
+            ET.SubElement(sp, "rate").text     = f"{speed:.4f}"
+            ET.SubElement(sp, "inverted").text = "FALSE"
+            ET.SubElement(sp, "segmenttype").text = "smooth"
+
+        # transition (between this clip and next)
+        if clip.transition_out != "cut" and i < len(timeline.clips) - 1:
+            t_name = XFADE_MAP.get(clip.transition_out, "Cross Dissolve")
+            cut_frame  = _frames(timeline_pos + clip.display_duration)
+            t_start    = _frames(timeline_pos + clip.display_duration - trans_half)
+            t_end      = _frames(timeline_pos + clip.display_duration + trans_half)
+            ti = ET.SubElement(track, "transitionitem")
+            ET.SubElement(ti, "start").text     = str(t_start)
+            ET.SubElement(ti, "end").text       = str(t_end)
+            ET.SubElement(ti, "alignment").text = "center-of-cut"
+            ET.SubElement(ti, "cutPointTicks").text = str(cut_frame)
+            eff = ET.SubElement(ti, "effect")
+            ET.SubElement(eff, "name").text           = t_name
+            ET.SubElement(eff, "effectid").text       = t_name
+            ET.SubElement(eff, "effectcategory").text = "Dissolve"
+            ET.SubElement(eff, "effecttype").text     = "transition"
+            ET.SubElement(eff, "mediatype").text      = "video"
+
+        overlap = trans_dur if clip.transition_out != "cut" else 0.0
+        timeline_pos += clip.display_duration - overlap
+
+    # ── audio (BGM) ────────────────────────────────────────────
+    if timeline.bgm_path and Path(timeline.bgm_path).exists():
+        audio_elem = ET.SubElement(media_elem, "audio")
+        afmt = ET.SubElement(audio_elem, "format")
+        asc  = ET.SubElement(afmt, "samplecharacteristics")
+        ET.SubElement(asc, "depth").text      = "16"
+        ET.SubElement(asc, "samplerate").text = "44100"
+
+        for ch in range(2):   # stereo: left + right
+            atrack = ET.SubElement(audio_elem, "track")
+            ET.SubElement(atrack, "enabled").text = "TRUE"
+            ET.SubElement(atrack, "locked").text  = "FALSE"
+
+            bgm_dur = timeline.total_duration
+            aci = ET.SubElement(atrack, "clipitem", id=f"audio-bgm-ch{ch+1}")
+            ET.SubElement(aci, "name").text     = Path(timeline.bgm_path).name
+            ET.SubElement(aci, "enabled").text  = "TRUE"
+            ET.SubElement(aci, "duration").text = str(_frames(bgm_dur))
+            _rate_elem(aci)
+            ET.SubElement(aci, "start").text = "0"
+            ET.SubElement(aci, "end").text   = str(_frames(bgm_dur))
+            ET.SubElement(aci, "in").text    = "0"
+            ET.SubElement(aci, "out").text   = str(_frames(bgm_dur))
+
+            bgm_resolved = str(Path(timeline.bgm_path).resolve())
+            bgm_first    = bgm_resolved not in seen_paths
+            seen_paths.add(bgm_resolved)
+            _file_elem(aci, timeline.bgm_path, bgm_dur, bgm_first)
+
+            ET.SubElement(aci, "sourcetrack").text = f"{'A1' if ch == 0 else 'A2'}"
+
+            # volume keyframes: fade out at end
+            ET.SubElement(aci, "filter")   # Premiere picks up level from here
+
+    # ── write ──────────────────────────────────────────────────
+    tree = ET.ElementTree(xmeml)
+    ET.indent(tree, space="  ")
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+        f.write('<!DOCTYPE xmeml>\n\n')
+        tree.write(f, encoding="unicode", xml_declaration=False)
+
+    logger.info(f"Premiere XML 导出完成: {output_path}")
+    return output_path
