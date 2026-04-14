@@ -81,7 +81,16 @@ GOOGLE_VISION_API_KEY = os.getenv("GOOGLE_VISION_API_KEY", "")
 
 # --- General ---
 HTTPS_PROXY = os.getenv("HTTPS_PROXY", "")
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_LEVEL   = os.getenv("LOG_LEVEL", "INFO")
+
+# --- Concurrency ---
+# 每个 app 实例同时持有的 Kling 槽位上限（启动默认值，运行时可通过 UI 调整）
+# 推荐值：4 人同时用 → 5；6-8 人 → 3；10 人以上 → 2
+KLING_MAX_CONCURRENT  = int(os.getenv("KLING_MAX_CONCURRENT",  "5"))
+# 每个 app 实例同时运行的完整 pipeline 数量上限
+APP_MAX_RUNNING_TASKS = int(os.getenv("APP_MAX_RUNNING_TASKS", "3"))
+# 管理员模式：设为 true/1 才显示并发设置按钮（普通用户不可见）
+ADMIN_MODE = os.getenv("ADMIN_MODE", "false").lower() in ("true", "1", "yes")
 
 
 def create_run_dirs(task_id: str) -> dict[str, Path]:

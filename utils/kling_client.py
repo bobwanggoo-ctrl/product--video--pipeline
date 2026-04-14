@@ -8,12 +8,13 @@ import base64
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import jwt
 import requests
 
 from config import settings
+from utils.dynamic_semaphore import DynamicSemaphore
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,10 @@ TASK_STATUS = {
     "succeed": "成功",
     "failed": "失败",
 }
+
+# 全局 Kling 并发信号量 — 所有 KlingClient 实例、所有 pipeline 共用
+# 初始值来自 .env，运行时可通过 kling_semaphore.set_limit(n) 动态调整
+kling_semaphore = DynamicSemaphore(settings.KLING_MAX_CONCURRENT)
 
 
 def _generate_jwt_token(access_key: str, secret_key: str, expire_seconds: int = 1800) -> str:
@@ -223,8 +228,13 @@ class KlingClient:
         *,
         poll_interval: float = 5.0,
         timeout: float = 300.0,
+        on_status: Optional[Callable[[str], None]] = None,
     ) -> dict:
         """轮询等待任务完成。
+
+        Args:
+            on_status: 状态变化时的回调 callable(status)，
+                       status 为 "submitted" / "processing" / "succeed" / "failed"
 
         Returns:
             get_task() 的结果。
@@ -234,15 +244,19 @@ class KlingClient:
             RuntimeError: 任务失败。
         """
         deadline = time.time() + timeout
+        last_status: Optional[str] = None
 
         while time.time() < deadline:
             result = self.get_task(task_id)
             status = result["task_status"]
 
+            if status != last_status:
+                last_status = status
+                if on_status:
+                    on_status(status)
+
             if status == "succeed":
-                logger.info(
-                    f"[Kling] 任务完成: {task_id} → {result['video_url']}"
-                )
+                logger.info(f"[Kling] 任务完成: {task_id} → {result['video_url']}")
                 return result
 
             if status == "failed":
@@ -252,6 +266,37 @@ class KlingClient:
             time.sleep(poll_interval)
 
         raise TimeoutError(f"可灵任务 {task_id} 超时 ({timeout}s)")
+
+    def submit_and_wait(
+        self,
+        image: str,
+        prompt: str = "",
+        *,
+        poll_interval: float = 5.0,
+        timeout: float = 300.0,
+        on_status: Optional[Callable[[str], None]] = None,
+        **kwargs,
+    ) -> dict:
+        """持有全局信号量槽位，提交并等待 Kling 任务完成。
+
+        在获得槽位之前调用 on_status("waiting") 通知调用方当前正在排队。
+        进入槽位后按 Kling 实际状态回调 on_status。
+
+        Returns:
+            wait_for_task() 的结果（含 video_url 等）。
+        """
+        if on_status:
+            on_status("waiting")              # 等待全局信号量 → UI 变黄
+
+        with kling_semaphore:
+            create_result = self.image_to_video(image, prompt, **kwargs)
+            task_id = create_result["task_id"]
+            return self.wait_for_task(
+                task_id,
+                poll_interval=poll_interval,
+                timeout=timeout,
+                on_status=on_status,
+            )
 
     # ── 下载视频 ──────────────────────────────────────
 

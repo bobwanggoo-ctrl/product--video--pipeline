@@ -31,12 +31,13 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QGridLayout, QLabel, QTextEdit, QLineEdit, QPushButton, QFileDialog,
     QProgressBar, QScrollArea, QSizePolicy, QFrame, QStackedWidget,
-    QGraphicsDropShadowEffect,
+    QGraphicsDropShadowEffect, QDialog, QSpinBox, QFormLayout,
 )
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 
 from gui.worker import PipelineWorker
+from gui.task_queue import AppTaskQueue
 
 
 # ── Palette ──────────────────────────────────────────────────
@@ -50,6 +51,7 @@ FOCUS_BORDER    = "#AEAEB2"   # card focus ring — light gray
 BTN_PRIMARY     = "#3A3A3C"   # start button — dark gray
 BTN_PRIMARY_HVR = "#2C2C2E"
 SUCCESS         = "#34C759"
+KLING_WAITING   = "#FFD60A"   # 可灵排队中 → 黄色进度条
 ERROR_COLOR     = "#FF3B30"
 STEP_DONE       = "#34C759"
 STEP_ACTIVE     = "#007AFF"
@@ -149,9 +151,10 @@ class TaskTab(QFrame):
         self.setFixedSize(self.TAB_W, self.TAB_H)
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_Hover)
-        self._active   = False
-        self._progress = 0.0
-        self._editing  = False
+        self._active          = False
+        self._progress        = 0.0
+        self._progress_color  = SUCCESS   # 默认绿色；可灵排队时改为 KLING_WAITING
+        self._editing         = False
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(8, 0, 6, 0)
@@ -189,6 +192,11 @@ class TaskTab(QFrame):
     def set_progress(self, pct: float):
         """pct: 0.0 – 1.0"""
         self._progress = max(0.0, min(1.0, pct))
+        self.update()
+
+    def set_progress_color(self, color: str):
+        """动态切换进度条颜色（SUCCESS 绿色 / KLING_WAITING 黄色）。"""
+        self._progress_color = color
         self.update()
 
     def get_name(self) -> str:
@@ -279,13 +287,13 @@ class TaskTab(QFrame):
         path.addRoundedRect(rect, 8, 8)
         p.drawPath(path)
 
-        # Green charge fill (clipped to rounded rect)
+        # Progress fill (clipped to rounded rect, color reflects Kling status)
         if self._progress > 0:
             fill_w = w * self._progress
-            green = QColor(SUCCESS)
-            green.setAlpha(55)
+            fill_color = QColor(self._progress_color)
+            fill_color.setAlpha(55)
             p.setClipPath(path)
-            p.setBrush(green)
+            p.setBrush(fill_color)
             p.drawRect(QRectF(0, 0, fill_w, h))
             p.setClipping(False)
 
@@ -379,9 +387,14 @@ class TaskSidebar(QWidget):
         if 0 <= task_idx < len(self._tabs):
             self._tabs[task_idx].set_progress(pct)
 
+    def set_progress_color(self, task_idx: int, color: str):
+        if 0 <= task_idx < len(self._tabs):
+            self._tabs[task_idx].set_progress_color(color)
+
     def reset_tab_dots(self, task_idx: int):
         if 0 <= task_idx < len(self._tabs):
-            self._tabs[task_idx].set_progress(0.01)  # 1% on start
+            self._tabs[task_idx].set_progress(0.01)
+            self._tabs[task_idx].set_progress_color(SUCCESS)  # 重置为绿色
 
     def count(self) -> int:
         return len(self._tabs)
@@ -1175,7 +1188,17 @@ class RightPanel(QWidget):
         if mp4_path and Path(mp4_path).exists():
             self.player.setSource(QUrl.fromLocalFile(mp4_path))
         self.stack.setCurrentIndex(2)
-        QTimer.singleShot(100, self._reposition_play_btn)
+        # 延迟 150ms 等布局稳定后自动播放并定位播放按钮
+        QTimer.singleShot(150, self._start_playback)
+
+    def _start_playback(self):
+        self._reposition_play_btn()
+        if self._mp4_path and Path(self._mp4_path).exists():
+            self.player.play()
+        else:
+            # 文件不存在时显示播放按钮作为提示
+            self.play_btn.show()
+            self.play_btn.raise_()
 
     def show_error(self, message: str):
         self.append_log(f"❌ {message}")
@@ -1233,6 +1256,10 @@ class MainWindow(QMainWindow):
         self._tasks: list[TaskState] = []
         self._current_idx: int = 0
         self._result: dict = {}
+
+        # 全局任务执行队列（pipeline 级并发控制）
+        from config.settings import APP_MAX_RUNNING_TASKS
+        self._task_queue = AppTaskQueue(APP_MAX_RUNNING_TASKS)
 
         self._setup_ui()
 
@@ -1387,10 +1414,22 @@ class MainWindow(QMainWindow):
     def _on_task_progress(self, task_idx: int, step: str, status: str, detail: str):
         if not (0 <= task_idx < len(self._tasks)):
             return
+
+        # Kling 排队状态 → 只改颜色，不推进百分比
+        if status == "kling_queued":
+            self.task_sidebar.set_progress_color(task_idx, KLING_WAITING)
+            return
+        if status == "kling_active":
+            self.task_sidebar.set_progress_color(task_idx, SUCCESS)
+            return
+
         self._tasks[task_idx].step_states[step] = "active" if status == "started" else status
         # Update tab progress bar
         pct = self._step_to_pct(step, status)
         self.task_sidebar.set_progress(task_idx, pct)
+        # 步骤完成后确保颜色恢复绿色（防止之前黄色残留）
+        if status == "completed":
+            self.task_sidebar.set_progress_color(task_idx, SUCCESS)
         # Update right panel only if this task is currently shown
         if task_idx == self._current_idx:
             self.right_panel.on_step_progress(step, status, detail)
@@ -1530,6 +1569,15 @@ class MainWindow(QMainWindow):
         self.files_btn.clicked.connect(self._on_open_files)
         bottom.addWidget(self.files_btn)
 
+        settings_btn = QPushButton("⚙")
+        settings_btn.setObjectName("secondary")
+        settings_btn.setFixedWidth(32)
+        settings_btn.setToolTip("并发设置（管理员）")
+        settings_btn.clicked.connect(self._on_open_settings)
+        from config.settings import ADMIN_MODE
+        settings_btn.setVisible(ADMIN_MODE)
+        bottom.addWidget(settings_btn)
+
         # ── Bottom + footer grouped with no gap between them ──
         bottom_group = QVBoxLayout()
         bottom_group.setSpacing(0)
@@ -1584,7 +1632,8 @@ class MainWindow(QMainWindow):
         task.panel_state = 1
         self.task_sidebar.set_progress(task_idx, 0.01)
         self.right_panel.show_running()
-        worker.start()
+        # 通过全局任务队列启动（不直接 start()，由队列控制并发）
+        self._task_queue.submit(worker)
         # Fold current input panel → then create & reveal a new blank task
         if len(self._tasks) < MAX_TASKS:
             self._fold_then_new_task()
@@ -1611,6 +1660,48 @@ class MainWindow(QMainWindow):
             subprocess.Popen(["explorer", target])
         else:
             subprocess.Popen(["xdg-open", target])
+
+    def _on_open_settings(self):
+        """并发设置弹窗 — 运行时调整 Kling 槽位数和 pipeline 并发数。"""
+        from utils.kling_client import kling_semaphore
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("并发设置")
+        dlg.setFixedWidth(280)
+
+        form = QFormLayout(dlg)
+        form.setContentsMargins(20, 20, 20, 20)
+        form.setSpacing(12)
+
+        kling_spin = QSpinBox()
+        kling_spin.setRange(1, 20)
+        kling_spin.setValue(kling_semaphore.limit)
+        kling_spin.setToolTip("推荐：4 人用 5，2 人用 10，10 人以上用 2")
+        form.addRow("可灵并发槽位", kling_spin)
+
+        task_spin = QSpinBox()
+        task_spin.setRange(1, MAX_TASKS)
+        task_spin.setValue(self._task_queue.limit)
+        task_spin.setToolTip("同时运行的完整 pipeline 数量")
+        form.addRow("Pipeline 并发数", task_spin)
+
+        note = QLabel("修改立即生效，无需重启。\n可灵推荐值 = 20 / 使用人数。")
+        note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        note.setWordWrap(True)
+        form.addRow(note)
+
+        ok_btn = QPushButton("确定")
+        ok_btn.clicked.connect(dlg.accept)
+        form.addRow(ok_btn)
+
+        def _apply():
+            kling_semaphore.set_limit(kling_spin.value())
+            self._task_queue.set_limit(task_spin.value())
+
+        kling_spin.valueChanged.connect(lambda _: _apply())
+        task_spin.valueChanged.connect(lambda _: _apply())
+
+        dlg.exec()
 
     # Forward Cmd+V to the image grid when focus is elsewhere
     def keyPressEvent(self, e):

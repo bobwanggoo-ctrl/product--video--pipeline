@@ -291,44 +291,44 @@ class PipelineOrchestrator:
     def _generate_videos(
         self, shot_ids: list[int], frame_paths: dict, input_data: dict,
     ) -> list[dict]:
-        """调用 Kling API 批量生成视频。
+        """调用 Kling API 批量生成视频（通过全局信号量限速）。
 
-        先批量提交所有任务，再逐个轮询等待 + 下载。
+        每个 shot 调用 submit_and_wait()，信号量保证同时 in-flight 的
+        Kling 任务数不超过 kling_semaphore.limit。状态变化通过
+        on_progress 透传给 GUI（kling_queued → 黄色，kling_active → 绿色）。
 
         Returns: [{"shot_id": int, "success": bool, "video_path": str}]
         """
         from utils.kling_client import KlingClient
 
         client = KlingClient()
-        motion_map = input_data.get("motion_map", {})  # {shot_id: motion_prompt}
+        motion_map = input_data.get("motion_map", {})
         output_dir = Path(input_data.get("video_output_dir", str(settings.VIDEOS_DIR)))
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. 批量提交
-        task_map: dict[str, int] = {}  # {task_id: shot_id}
-        submit_failed: list[dict] = []
+        results: list[dict] = []
 
         for sid in shot_ids:
             frame_path = frame_paths.get(sid, "")
             if not frame_path:
-                submit_failed.append({"shot_id": sid, "success": False, "video_path": ""})
+                results.append({"shot_id": sid, "success": False, "video_path": ""})
                 continue
+
+            # 状态回调 → 透传给 GUI 进度颜色
+            def _on_status(status: str, _sid: int = sid) -> None:
+                if not self._on_progress:
+                    return
+                if status in ("waiting", "submitted"):
+                    self._on_progress("frame_to_video", "kling_queued",  f"shot_{_sid:02d}")
+                elif status == "processing":
+                    self._on_progress("frame_to_video", "kling_active",  f"shot_{_sid:02d}")
+
             try:
                 motion_prompt = motion_map.get(sid, "")
-                result = client.image_to_video(frame_path, prompt=motion_prompt)
-                task_map[result["task_id"]] = sid
-                logger.info(f"  shot_{sid:02d} → Kling task {result['task_id']}")
-            except Exception as e:
-                logger.warning(f"  shot_{sid:02d} Kling 提交失败: {e}")
-                submit_failed.append({"shot_id": sid, "success": False, "video_path": ""})
-
-        logger.info(f"[Pipeline] Kling 提交: {len(task_map)} 成功, {len(submit_failed)} 失败")
-
-        # 2. 逐个轮询 + 下载
-        results = list(submit_failed)
-        for task_id, sid in task_map.items():
-            try:
-                task_result = client.wait_for_task(task_id, timeout=600.0)
+                task_result = client.submit_and_wait(
+                    frame_path, prompt=motion_prompt,
+                    timeout=600.0, on_status=_on_status,
+                )
                 video_url = task_result.get("video_url")
                 if not video_url:
                     logger.warning(f"  shot_{sid:02d} 无视频 URL")
@@ -339,6 +339,7 @@ class PipelineOrchestrator:
                 client.download_video(video_url, video_path)
                 results.append({"shot_id": sid, "success": True, "video_path": video_path})
                 logger.info(f"  shot_{sid:02d} ✓ → {video_path}")
+
             except Exception as e:
                 logger.warning(f"  shot_{sid:02d} Kling 失败: {e}")
                 results.append({"shot_id": sid, "success": False, "video_path": ""})
