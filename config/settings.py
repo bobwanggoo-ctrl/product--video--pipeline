@@ -97,26 +97,29 @@ def create_run_dirs(task_id: str) -> dict[str, Path]:
     """Create isolated output directories for a pipeline run.
 
     Structure:
-        output/{task_id}/
-        └── {task_id}-Final/          ← opened by "视频文件" button
+        output/{task_id}/               ← opened by "视频文件" button
+        ├── {task_id}.mp4
+        ├── {task_id}.fcpxml
+        └── {task_id}-附件/             ← everything else, flat (no sub-folders)
             ├── frames/
             ├── videos/
             ├── checkpoint.json
-            └── 附件/                 ← SRT, JSON exports, storyboard, etc.
+            ├── storyboard.json
+            ├── sellpoint.txt
+            └── SRT / JSON exports ...
     """
     root  = OUTPUT_DIR / task_id
-    final = root / f"{task_id}-Final"
-    other = final / "附件"
+    other = root / f"{task_id}-附件"
     dirs = {
         "root":       root,
+        "final":      root,           # mp4/fcpxml 输出到这里，"视频文件"也打开这里
+        "other":      other,          # 附件目录，所有辅助文件平铺于此
         "storyboard": other / "storyboard.json",
         "sellpoint":  other / "sellpoint.txt",
-        "frames":     final / "frames",
-        "videos":     final / "videos",
-        "final":      final,
-        "other":      other,
+        "frames":     other / "frames",
+        "videos":     other / "videos",
         "trace":      other / "trace",
-        "checkpoint": final / "checkpoint.json",
+        "checkpoint": other / "checkpoint.json",
     }
     # Create directories (not file paths)
     for key in ("root", "frames", "videos", "other", "trace"):

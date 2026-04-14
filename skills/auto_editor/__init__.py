@@ -100,8 +100,8 @@ def run(
     logger.info("Skill 5 Step 4/4: 组装 + 导出")
     logger.info("=" * 60)
 
-    # SRT 字幕 + 剪映 JSON → 附件/ 子目录
-    other_dir = out_dir / "附件"
+    # SRT 字幕 + 剪映 JSON → {task_name}-附件/ 子目录（与 create_run_dirs 命名一致）
+    other_dir = out_dir / f"{task_name}-附件" if task_name else out_dir / "附件"
     other_dir.mkdir(parents=True, exist_ok=True)
 
     srt_base = task_name if task_name else "subtitles"
@@ -114,10 +114,10 @@ def run(
     assemble(
         timeline, mp4_path,
         srt_path=srt_paths["en"],
-        temp_dir=str(out_dir / "temp"),
+        temp_dir=str(other_dir / "temp"),   # temp 也放进附件，不污染顶层
     )
 
-    # NLE 项目导出：fcpxml 留在 Final/，剪映 JSON 放到 附件/
+    # NLE 项目导出：fcpxml 留在顶层，剪映 JSON 放到 附件/
     jianying_name = f"{task_name}-剪映工程.json" if task_name else "draft_content.json"
     fcpxml_name   = f"{task_name}-工程文件.fcpxml" if task_name else "project.fcpxml"
     jianying_path = str(other_dir / jianying_name)
