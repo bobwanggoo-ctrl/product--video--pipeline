@@ -1,10 +1,9 @@
-"""Skill 5 Module B: 项目文件导出（剪映 JSON + FCPXML）。
+"""Skill 5 Module B: 项目文件导出（剪映草稿 + FCPXML）。
 
 将 EditingTimeline 导出为 NLE 可导入的项目文件，
 字幕和 BGM 作为独立轨道引用（不烧录到视频）。
 """
 
-import json
 import logging
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -14,172 +13,138 @@ from models.timeline import EditingTimeline
 logger = logging.getLogger(__name__)
 
 
-# 剪映用微秒为时间单位
-_US = 1_000_000
+# ── 剪映草稿导出（pyJianYingDraft）────────────────────────────────
 
-
-# ── 剪映 JSON 导出 ────────────────────────────────────────────
-
-def export_jianying_json(
+def export_jianying_draft(
     timeline: EditingTimeline,
-    output_path: str,
-    srt_path: str = "",
+    output_dir: str,
+    task_name: str = "",
 ) -> str:
-    """导出剪映参考 JSON（含完整时间线信息）。
+    """用 pyJianYingDraft 生成可直接导入剪映的草稿文件夹。
 
-    注意：剪映专业版的 .draft 文件是加密的，无法直接生成可导入的项目文件。
-    此 JSON 作为参考文件，包含完整的素材、轨道、时间码信息，
-    用户可参照在剪映中手动重建项目。
+    在 output_dir 下创建 {task_name}-剪映工程/ 文件夹，
+    内含 draft_content.json + draft_meta_info.json，
+    用户将该文件夹拖入剪映草稿目录即可打开。
 
-    格式结构：
-    - materials: {videos, audios, texts}  素材引用池
-    - tracks: [{type, segments}]          时间线轨道
-    时间单位：微秒。
+    若 pyJianYingDraft 未安装，自动降级输出参考 JSON。
+
+    Returns:
+        草稿文件夹路径（或降级时的 JSON 文件路径）。
     """
-    import uuid
+    draft_name = f"{task_name}-剪映工程" if task_name else "剪映工程"
+    out_dir = Path(output_dir)
 
-    def _uid() -> str:
-        return uuid.uuid4().hex[:24].upper()
+    try:
+        import pyJianYingDraft as jy
+        from pyJianYingDraft import SEC
+    except ImportError:
+        logger.warning("pyJianYingDraft 未安装，降级为参考 JSON 导出；运行 pip install pyJianYingDraft 安装")
+        fallback_path = str(out_dir / f"{draft_name}.json")
+        return _export_reference_json(timeline, fallback_path)
 
-    # ── 1. 构建 materials ──
+    res_parts = timeline.resolution.split("x")
+    width  = int(res_parts[0]) if len(res_parts) == 2 else 1920
+    height = int(res_parts[1]) if len(res_parts) == 2 else 1080
+    fps    = max(1, int(timeline.fps))
 
-    # 视频素材
-    video_materials = []
-    for clip in timeline.clips:
-        video_materials.append({
-            "id": _uid(),
-            "type": "video",
-            "material_name": f"Shot {clip.shot_id}",
-            "path": str(Path(clip.source_path).resolve()),
-            "duration": int(clip.trim_end * _US),
-            "width": int(timeline.resolution.split("x")[0]) if "x" in timeline.resolution else 1920,
-            "height": int(timeline.resolution.split("x")[1]) if "x" in timeline.resolution else 1080,
-        })
+    def _tr(start_sec: float, duration_sec: float):
+        return jy.trange(int(start_sec * SEC), int(max(0.001, duration_sec) * SEC))
 
-    # 音频素材
-    audio_materials = []
-    if timeline.bgm_path:
-        audio_materials.append({
-            "id": _uid(),
-            "type": "audio",
-            "material_name": "BGM",
-            "path": str(Path(timeline.bgm_path).resolve()),
-            "duration": int(timeline.total_duration * _US),
-            "volume": timeline.bgm_volume,
-        })
-
-    # 文本素材
-    text_materials = []
-    for clip in timeline.clips:
-        if clip.subtitle_text:
-            text_materials.append({
-                "id": _uid(),
-                "type": "text",
-                "content": clip.subtitle_text,
-                "content_cn": clip.subtitle_text_cn,
-                "style": clip.subtitle_style,
-            })
-
-    materials = {
-        "videos": video_materials,
-        "audios": audio_materials,
-        "texts": text_materials,
-    }
-
-    # ── 2. 构建 tracks ──
-
-    # 视频轨道
-    video_segments = []
-    current_time_us = 0
-
-    for i, clip in enumerate(timeline.clips):
-        duration_us = int(clip.display_duration * _US)
-        trim_start_us = int(clip.trim_start * _US)
-        trim_end_us = int(clip.trim_end * _US)
-
-        segment = {
-            "material_id": video_materials[i]["id"],
-            "target_timerange": {
-                "start": current_time_us,
-                "duration": duration_us,
-            },
-            "source_timerange": {
-                "start": trim_start_us,
-                "duration": trim_end_us - trim_start_us,
-            },
-            "speed": clip.speed_factor,
-            "extra_material_refs": [],
-        }
-
-        # 转场信息
-        if clip.transition_out != "cut":
-            segment["transition"] = {
-                "type": clip.transition_out,
-                "duration": int(clip.transition_duration * _US),
-            }
-
-        video_segments.append(segment)
-
-        overlap = clip.transition_duration * _US if clip.transition_out != "cut" else 0
-        current_time_us += duration_us - int(overlap)
-
-    # 文本轨道（字幕）
-    text_segments = []
-    text_mat_idx = 0
-    current_time_us = 0
-    for clip in timeline.clips:
-        duration_us = int(clip.display_duration * _US)
-        if clip.subtitle_text and text_mat_idx < len(text_materials):
-            text_segments.append({
-                "material_id": text_materials[text_mat_idx]["id"],
-                "target_timerange": {
-                    "start": current_time_us,
-                    "duration": duration_us,
-                },
-            })
-            text_mat_idx += 1
-        overlap = clip.transition_duration * _US if clip.transition_out != "cut" else 0
-        current_time_us += duration_us - int(overlap)
-
-    # 音频轨道（BGM）
-    audio_segments = []
-    if timeline.bgm_path and audio_materials:
-        audio_segments.append({
-            "material_id": audio_materials[0]["id"],
-            "target_timerange": {
-                "start": 0,
-                "duration": int(timeline.total_duration * _US),
-            },
-            "volume": timeline.bgm_volume,
-            "fade_out_duration": int(timeline.bgm_fade_out_sec * _US),
-        })
-
-    tracks = [
-        {"type": "video", "segments": video_segments},
-        {"type": "text", "segments": text_segments},
-        {"type": "audio", "segments": audio_segments},
-    ]
-
-    # ── 3. 组装 draft_content ──
-
-    project = {
-        "id": _uid(),
-        "name": "Product Video",
-        "materials": materials,
-        "tracks": tracks,
-        "duration": int(timeline.total_duration * _US),
-        "canvas_config": {
-            "width": int(timeline.resolution.split("x")[0]) if "x" in timeline.resolution else 1920,
-            "height": int(timeline.resolution.split("x")[1]) if "x" in timeline.resolution else 1080,
-            "ratio": timeline.resolution,
-        },
-    }
-
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(output_path).write_text(
-        json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8"
+    # ── 创建草稿 ──
+    draft_folder = jy.DraftFolder(str(out_dir))
+    script = draft_folder.create_draft(
+        draft_name, width, height, fps=fps, allow_replace=True,
     )
-    logger.info(f"剪映参考 JSON 导出完成: {output_path}")
+
+    # ── 视频轨道 ──
+    script.add_track(jy.TrackType.video)
+    current_t = 0.0
+    for clip in timeline.clips:
+        duration = clip.display_duration
+        src_dur  = clip.trim_end - clip.trim_start
+        seg = jy.VideoSegment(
+            clip.source_path,
+            _tr(current_t, duration),
+            source_timerange=_tr(clip.trim_start, src_dur),
+            speed=clip.speed_factor,
+            volume=1.0,
+        )
+        script.add_segment(seg)
+        overlap = clip.transition_duration if clip.transition_out != "cut" else 0.0
+        current_t += duration - overlap
+
+    # ── BGM 音频轨道 ──
+    if timeline.bgm_path and Path(timeline.bgm_path).exists():
+        script.add_track(jy.TrackType.audio)
+        bgm_seg = jy.AudioSegment(
+            timeline.bgm_path,
+            _tr(0.0, timeline.total_duration),
+            volume=timeline.bgm_volume,
+        )
+        bgm_seg.add_fade("0s", int(timeline.bgm_fade_out_sec * SEC))
+        script.add_segment(bgm_seg)
+
+    # ── 字幕文本轨道 ──
+    if any(clip.subtitle_text for clip in timeline.clips):
+        script.add_track(jy.TrackType.text)
+        current_t = 0.0
+        for clip in timeline.clips:
+            duration = clip.display_duration
+            if clip.subtitle_text:
+                is_title = clip.subtitle_style == "title"
+                style = jy.text_segment.TextStyle(
+                    size=10.0 if is_title else 7.0,
+                    bold=True,
+                    color=(1.0, 1.0, 1.0),
+                )
+                border = jy.text_segment.TextBorder(color=(0.0, 0.0, 0.0), width=0.08)
+                text_seg = jy.TextSegment(
+                    clip.subtitle_text,
+                    _tr(current_t, duration),
+                    style=style,
+                    border=border,
+                )
+                script.add_segment(text_seg)
+            overlap = clip.transition_duration if clip.transition_out != "cut" else 0.0
+            current_t += duration - overlap
+
+    script.save()
+
+    draft_path = str(out_dir / draft_name)
+    logger.info(f"剪映草稿导出完成: {draft_path}")
+    return draft_path
+
+
+def _export_reference_json(timeline: EditingTimeline, output_path: str) -> str:
+    """pyJianYingDraft 不可用时的降级：输出含时间线信息的参考 JSON。"""
+    import json, uuid
+    US = 1_000_000
+    uid = lambda: uuid.uuid4().hex[:24].upper()
+    clips_data = []
+    t = 0.0
+    for clip in timeline.clips:
+        clips_data.append({
+            "shot_id": clip.shot_id,
+            "source_path": str(Path(clip.source_path).resolve()),
+            "target_start_us": int(t * US),
+            "target_duration_us": int(clip.display_duration * US),
+            "source_start_us": int(clip.trim_start * US),
+            "source_duration_us": int((clip.trim_end - clip.trim_start) * US),
+            "speed": clip.speed_factor,
+            "subtitle": clip.subtitle_text,
+        })
+        overlap = clip.transition_duration if clip.transition_out != "cut" else 0.0
+        t += clip.display_duration - overlap
+    project = {
+        "id": uid(), "name": "Product Video (reference)",
+        "resolution": timeline.resolution, "fps": timeline.fps,
+        "duration_us": int(timeline.total_duration * US),
+        "clips": clips_data,
+        "bgm": {"path": timeline.bgm_path, "volume": timeline.bgm_volume} if timeline.bgm_path else None,
+    }
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_path).write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info(f"参考 JSON 导出（降级）: {output_path}")
     return output_path
 
 

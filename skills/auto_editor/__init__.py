@@ -16,7 +16,7 @@ from .font_scanner import scan_font_library
 from .llm_editor import make_editing_decision
 from .subtitle_gen import generate_dual_srt
 from .ffmpeg_assembler import assemble
-from .edl_exporter import export_jianying_json, export_fcpxml
+from .edl_exporter import export_jianying_draft, export_fcpxml
 
 logger = logging.getLogger(__name__)
 
@@ -117,12 +117,11 @@ def run(
         temp_dir=str(other_dir / "temp"),   # temp 也放进附件，不污染顶层
     )
 
-    # NLE 项目导出：fcpxml 留在顶层，剪映 JSON 放到 附件/
-    jianying_name = f"{task_name}-剪映工程.json" if task_name else "draft_content.json"
+    # NLE 项目导出：fcpxml 和剪映草稿都在顶层（out_dir = 任务根目录）
+    # 剪映：pyJianYingDraft 在 out_dir 下创建 {task_name}-剪映工程/ 文件夹
     fcpxml_name   = f"{task_name}-工程文件.fcpxml" if task_name else "project.fcpxml"
-    jianying_path = str(other_dir / jianying_name)
     fcpxml_path   = str(out_dir / fcpxml_name)
-    export_jianying_json(timeline, jianying_path, srt_paths["en"])
+    jianying_path = export_jianying_draft(timeline, str(out_dir), task_name=task_name)
     # title_templates_dir 未传时自动使用 assets/ 目录
     if not title_templates_dir:
         from config import settings
