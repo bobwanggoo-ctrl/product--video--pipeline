@@ -87,20 +87,29 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 def create_run_dirs(task_id: str) -> dict[str, Path]:
     """Create isolated output directories for a pipeline run.
 
-    Returns dict with keys: root, storyboard, sellpoint, frames, videos, final, checkpoint
+    Structure:
+        output/{task_id}/
+        └── {task_id}-Final/          ← opened by "视频文件" button
+            ├── frames/
+            ├── videos/
+            ├── checkpoint.json
+            └── 附件/                 ← SRT, JSON exports, storyboard, etc.
     """
-    root = OUTPUT_DIR / task_id
+    root  = OUTPUT_DIR / task_id
+    final = root / f"{task_id}-Final"
+    other = final / "附件"
     dirs = {
-        "root": root,
-        "storyboard": root / "storyboard.json",
-        "sellpoint": root / "sellpoint.txt",
-        "frames": root / "frames",
-        "videos": root / "videos",
-        "final": root / "final",
-        "trace": root / "trace",
-        "checkpoint": root / "checkpoint.json",
+        "root":       root,
+        "storyboard": other / "storyboard.json",
+        "sellpoint":  other / "sellpoint.txt",
+        "frames":     final / "frames",
+        "videos":     final / "videos",
+        "final":      final,
+        "other":      other,
+        "trace":      other / "trace",
+        "checkpoint": final / "checkpoint.json",
     }
     # Create directories (not file paths)
-    for key in ("root", "frames", "videos", "final", "trace"):
+    for key in ("root", "frames", "videos", "other", "trace"):
         dirs[key].mkdir(parents=True, exist_ok=True)
     return dirs

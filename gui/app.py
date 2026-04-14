@@ -1498,7 +1498,8 @@ class MainWindow(QMainWindow):
         bottom.setSpacing(0)
         bottom.setContentsMargins(0, 0, 0, 0)
 
-        # Left button group — same width as left panel, buttons centered inside
+        # Left button group — offset by sidebar width so buttons center under 卖点文案 box
+        bottom.addSpacing(TaskSidebar.WIDTH + 12)   # sidebar(88) + content spacing(12)
         btn_wrapper = QWidget()
         btn_wrapper.setFixedWidth(272)
         btn_inner = QHBoxLayout(btn_wrapper)
@@ -1559,7 +1560,7 @@ class MainWindow(QMainWindow):
             return
 
         images = self.left_panel.get_image_paths()
-        worker = PipelineWorker(sellpoint, images)
+        worker = PipelineWorker(sellpoint, images, task.name)
         task.worker = worker
 
         # Route all signals through task index
@@ -1601,8 +1602,8 @@ class MainWindow(QMainWindow):
         output_dir = self._result.get("output_dir", "")
         if not output_dir:
             return
-        final_dir = Path(output_dir) / "final"
-        target = str(final_dir) if final_dir.exists() else output_dir
+        # output_dir is root during run, final folder after completion
+        target = output_dir
         import subprocess, platform
         if platform.system() == "Darwin":
             subprocess.Popen(["open", target])

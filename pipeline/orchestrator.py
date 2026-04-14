@@ -439,6 +439,10 @@ class PipelineOrchestrator:
             if on_progress:
                 on_progress(step.value, "completed", "")
 
+            # Save compliance report as named JSON after compliance step
+            if step == PipelineStep.COMPLIANCE_CHECK:
+                self._save_compliance_report(run_dirs, initial_input)
+
             # Save checkpoint after each step
             self.state.save(run_dirs["checkpoint"])
 
@@ -491,6 +495,7 @@ class PipelineOrchestrator:
                 "video_paths": sorted_paths,
                 "storyboard": out("sellpoint_to_storyboard").get("storyboard"),
                 "output_dir": str(dirs["final"]),
+                "task_name": ini.get("task_name", ""),
                 "bgm_dir": ini.get("bgm_dir", ""),
                 "font_dir": ini.get("font_dir", ""),
                 "title_templates_dir": ini.get("title_templates_dir", ""),
@@ -500,6 +505,31 @@ class PipelineOrchestrator:
             }
 
         return {}
+
+    def _save_compliance_report(self, run_dirs: dict, initial_input: dict) -> None:
+        """Save compliance results as {task_name}-合规审查.json in the task root."""
+        import json as _json
+        task_name = initial_input.get("task_name", "")
+        if not task_name:
+            return
+        compliance_data = self.state.steps["compliance_check"].output_data or {}
+        cr_list = compliance_data.get("compliance_results") or []
+        if not cr_list:
+            return
+        try:
+            serializable = [
+                cr.model_dump() if hasattr(cr, "model_dump") else cr
+                for cr in cr_list
+            ]
+            other_dir = run_dirs.get("other", run_dirs["root"])
+            out_path = other_dir / f"{task_name}-合规审查.json"
+            out_path.write_text(
+                _json.dumps(serializable, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            logger.info(f"[Pipeline] 合规审查报告 → {out_path}")
+        except Exception as e:
+            logger.warning(f"[Pipeline] 合规报告保存失败: {e}")
 
     def _collect_final_output(self) -> dict:
         """Gather final results from all steps."""

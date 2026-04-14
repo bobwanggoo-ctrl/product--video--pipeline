@@ -26,6 +26,7 @@ def run(
     storyboard: Storyboard,
     output_dir: str,
     *,
+    task_name: str = "",
     bgm_dir: str = "",
     font_dir: str = "",
     title_templates_dir: str = "",  # 空时自动用 settings.FCP_TITLES_DIR
@@ -99,21 +100,28 @@ def run(
     logger.info("Skill 5 Step 4/4: 组装 + 导出")
     logger.info("=" * 60)
 
-    # SRT 字幕（预生成，给 NLE 项目引用；MP4 烧录用 assembler 内部实际时长版）
-    srt_paths = generate_dual_srt(timeline, str(out_dir))
+    # SRT 字幕 + 剪映 JSON → 附件/ 子目录
+    other_dir = out_dir / "附件"
+    other_dir.mkdir(parents=True, exist_ok=True)
+
+    srt_base = task_name if task_name else "subtitles"
+    srt_paths = generate_dual_srt(timeline, str(other_dir), base_name=srt_base)
     logger.info(f"  SRT 字幕: {srt_paths}")
 
     # FFmpeg 组装（内部会用实际时长重算字幕再烧录）
-    mp4_path = str(out_dir / "final_output.mp4")
+    mp4_name = f"{task_name}.mp4" if task_name else "final_output.mp4"
+    mp4_path = str(out_dir / mp4_name)
     assemble(
         timeline, mp4_path,
         srt_path=srt_paths["en"],
         temp_dir=str(out_dir / "temp"),
     )
 
-    # NLE 项目导出
-    jianying_path = str(out_dir / "draft_content.json")
-    fcpxml_path = str(out_dir / "project.fcpxml")
+    # NLE 项目导出：fcpxml 留在 Final/，剪映 JSON 放到 附件/
+    jianying_name = f"{task_name}-剪映工程.json" if task_name else "draft_content.json"
+    fcpxml_name   = f"{task_name}-工程文件.fcpxml" if task_name else "project.fcpxml"
+    jianying_path = str(other_dir / jianying_name)
+    fcpxml_path   = str(out_dir / fcpxml_name)
     export_jianying_json(timeline, jianying_path, srt_paths["en"])
     # title_templates_dir 未传时自动使用 assets/ 目录
     if not title_templates_dir:

@@ -1,6 +1,7 @@
 """Background worker — runs the pipeline in a QThread."""
 
 import logging
+import re
 import shutil
 import threading
 from datetime import datetime
@@ -26,10 +27,13 @@ class PipelineWorker(QThread):
     pipeline_done  = Signal(dict)   # renamed: avoids shadowing QThread.finished
     error          = Signal(str)
 
-    def __init__(self, sellpoint_text: str, image_paths: list[str]):
+    def __init__(self, sellpoint_text: str, image_paths: list[str], task_name: str = ""):
         super().__init__()
         self.sellpoint_text = sellpoint_text
         self.image_paths = image_paths
+        # Sanitize task_name for filesystem; fall back to timestamp
+        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', task_name).strip('. ')
+        self.task_name = safe if safe else f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self._stop_event = threading.Event()
 
     # ── Qt entry point ──────────────────────────────────────
@@ -57,7 +61,7 @@ class PipelineWorker(QThread):
         from config.settings import create_run_dirs, INPUT_DIR, MUSIC_DIR, FONTS_DIR, FCP_TITLES_DIR
         from pipeline.orchestrator import PipelineOrchestrator, PipelineState
 
-        task_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        task_id = self.task_name
         input_dir = INPUT_DIR / task_id
         input_dir.mkdir(parents=True, exist_ok=True)
 
@@ -73,6 +77,7 @@ class PipelineWorker(QThread):
 
         initial_input = {
             "sellpoint_text": self.sellpoint_text,
+            "task_name": task_id,
             "reference_image_dir": str(input_dir),
             "bgm_dir": str(MUSIC_DIR) if MUSIC_DIR.exists() else "",
             "font_dir": str(FONTS_DIR) if FONTS_DIR.exists() else "",
@@ -91,7 +96,7 @@ class PipelineWorker(QThread):
             should_stop=self._stop_event.is_set,
         )
 
-        result["output_dir"] = str(run_dirs["root"])
+        result["output_dir"] = str(run_dirs["final"])   # open Final folder after done
         return result
 
 

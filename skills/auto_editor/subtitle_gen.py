@@ -128,8 +128,8 @@ def generate_dual_srt(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    en_path = str(out_dir / f"{base_name}_en.srt")
-    cn_path = str(out_dir / f"{base_name}_cn.srt")
+    en_path = str(out_dir / f"{base_name}-字幕-英文.srt")
+    cn_path = str(out_dir / f"{base_name}-字幕-中文.srt")
 
     generate_srt(timeline, en_path, language="en")
     generate_srt(timeline, cn_path, language="cn")
