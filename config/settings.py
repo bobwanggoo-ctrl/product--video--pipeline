@@ -89,6 +89,10 @@ LOG_LEVEL   = os.getenv("LOG_LEVEL", "INFO")
 KLING_MAX_CONCURRENT  = int(os.getenv("KLING_MAX_CONCURRENT",  "5"))
 # 每个 app 实例同时运行的完整 pipeline 数量上限
 APP_MAX_RUNNING_TASKS = int(os.getenv("APP_MAX_RUNNING_TASKS", "3"))
+
+# --- VEO 视频生成（AI导航）---
+VEO_FAST_GROUP_ID = int(os.getenv("VEO_FAST_GROUP_ID", "18"))  # veo_3_1-fast-components-4K, 2积分
+VEO_HQ_GROUP_ID   = int(os.getenv("VEO_HQ_GROUP_ID",   "20"))  # veo_3_1-components-4K, 5积分
 # 管理员模式：设为 true/1 才显示并发设置按钮（普通用户不可见）
 ADMIN_MODE = os.getenv("ADMIN_MODE", "false").lower() in ("true", "1", "yes")
 

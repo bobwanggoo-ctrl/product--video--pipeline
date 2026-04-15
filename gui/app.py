@@ -1513,9 +1513,39 @@ class MainWindow(QMainWindow):
         main.setContentsMargins(20, 20, 20, 20)
         main.setSpacing(16)
 
+        # ── 标题 + 视频模型切换 ─────────────────────────────
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        header.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(4)
+        title_col.setAlignment(Qt.AlignLeft)
+
         title = QLabel("Product Video Pipeline")
         title.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {TEXT_PRIMARY};")
-        main.addWidget(title)
+        title_col.addWidget(title)
+
+        # 视频模型切换按钮（小 chip 风格）
+        self._video_model = "kling"
+        self._kling_mode  = "std"   # std | pro
+        self._model_btn = QPushButton("视频模型：Kling Std  ▾")
+        self._model_btn.setStyleSheet(f"""
+            QPushButton {{
+                font-size: 10px; color: {TEXT_MUTED};
+                background: {CARD_BG}; border: 1px solid {BORDER};
+                border-radius: 8px; padding: 2px 9px;
+            }}
+            QPushButton:hover {{ background: #E8E8ED; border-color: {FOCUS_BORDER}; }}
+        """)
+        self._model_btn.setFixedHeight(20)
+        self._model_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self._model_btn.clicked.connect(self._on_model_select)
+        title_col.addWidget(self._model_btn)
+
+        header.addLayout(title_col)
+        header.addStretch()
+        main.addLayout(header)
 
         content = QHBoxLayout()
         content.setSpacing(12)
@@ -1608,7 +1638,7 @@ class MainWindow(QMainWindow):
             return
 
         images = self.left_panel.get_image_paths()
-        worker = PipelineWorker(sellpoint, images, task.name)
+        worker = PipelineWorker(sellpoint, images, task.name, self._video_model, self._kling_mode)
         task.worker = worker
 
         # Route all signals through task index
@@ -1660,6 +1690,51 @@ class MainWindow(QMainWindow):
             subprocess.Popen(["explorer", target])
         else:
             subprocess.Popen(["xdg-open", target])
+
+    def _on_model_select(self):
+        """视频模型切换菜单。"""
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QAction
+
+        # (video_model, kling_mode, 显示标签)
+        _OPTIONS = [
+            ("kling",    "std",  "Kling 标准版 Std"),
+            ("kling",    "pro",  "Kling 专业版 Pro"),
+            None,  # 分隔线
+            ("veo_fast", "",     "VEO 快速 4K  (2积分/片)"),
+            ("veo_hq",   "",     "VEO 高质量 4K  (5积分/片)"),
+        ]
+
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{ background: white; border: 1px solid {BORDER};
+                    border-radius: 8px; padding: 4px 0; }}
+            QMenu::item {{ padding: 6px 20px; font-size: 12px; color: {TEXT_PRIMARY}; }}
+            QMenu::item:selected {{ background: {CARD_BG}; }}
+            QMenu::item:checked {{ color: {ACCENT}; font-weight: 600; }}
+            QMenu::separator {{ height: 1px; background: {BORDER}; margin: 3px 10px; }}
+        """)
+
+        for opt in _OPTIONS:
+            if opt is None:
+                menu.addSeparator()
+                continue
+            vm, km, label = opt
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setChecked(self._video_model == vm and self._kling_mode == km)
+            act.setData((vm, km, label))
+            menu.addAction(act)
+
+        chosen = menu.exec(self._model_btn.mapToGlobal(
+            self._model_btn.rect().bottomLeft()
+        ))
+        if chosen and chosen.data():
+            vm, km, label = chosen.data()
+            self._video_model = vm
+            self._kling_mode  = km
+            short = label.split("  ")[0]
+            self._model_btn.setText(f"视频模型：{short}  ▾")
 
     def _on_open_settings(self):
         """并发设置弹窗 — 运行时调整 Kling 槽位数和 pipeline 并发数。"""

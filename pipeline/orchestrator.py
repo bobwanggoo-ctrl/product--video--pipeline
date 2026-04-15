@@ -291,21 +291,38 @@ class PipelineOrchestrator:
     def _generate_videos(
         self, shot_ids: list[int], frame_paths: dict, input_data: dict,
     ) -> list[dict]:
-        """调用 Kling API 批量生成视频（通过全局信号量限速）。
+        """批量生成视频，根据 video_model 路由到 Kling 或 VEO。
 
-        每个 shot 调用 submit_and_wait()，信号量保证同时 in-flight 的
-        Kling 任务数不超过 kling_semaphore.limit。状态变化通过
-        on_progress 透传给 GUI（kling_queued → 黄色，kling_active → 绿色）。
+        video_model 取值：
+            "kling"    — Kling API（默认）
+            "veo_fast" — AI导航 VEO 快速 4K (group=18)
+            "veo_hq"   — AI导航 VEO 高质量 4K (group=20)
 
         Returns: [{"shot_id": int, "success": bool, "video_path": str}]
         """
-        from utils.kling_client import KlingClient
-
-        client = KlingClient()
-        motion_map = input_data.get("motion_map", {})
-        output_dir = Path(input_data.get("video_output_dir", str(settings.VIDEOS_DIR)))
+        video_model = input_data.get("video_model", "kling")
+        motion_map  = input_data.get("motion_map", {})
+        output_dir  = Path(input_data.get("video_output_dir", str(settings.VIDEOS_DIR)))
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        if video_model in ("veo_fast", "veo_hq"):
+            return self._generate_videos_veo(
+                shot_ids, frame_paths, motion_map, output_dir, video_model
+            )
+        return self._generate_videos_kling(
+            shot_ids, frame_paths, motion_map, output_dir,
+            kling_mode=input_data.get("kling_mode", "std"),
+        )
+
+    def _generate_videos_kling(
+        self, shot_ids: list[int], frame_paths: dict,
+        motion_map: dict, output_dir: Path,
+        kling_mode: str = "std",
+    ) -> list[dict]:
+        """Kling 路线（原有逻辑）。"""
+        from utils.kling_client import KlingClient
+
+        client  = KlingClient(mode=kling_mode)
         results: list[dict] = []
 
         for sid in shot_ids:
@@ -314,14 +331,13 @@ class PipelineOrchestrator:
                 results.append({"shot_id": sid, "success": False, "video_path": ""})
                 continue
 
-            # 状态回调 → 透传给 GUI 进度颜色
             def _on_status(status: str, _sid: int = sid) -> None:
                 if not self._on_progress:
                     return
                 if status in ("waiting", "submitted"):
-                    self._on_progress("frame_to_video", "kling_queued",  f"shot_{_sid:02d}")
+                    self._on_progress("frame_to_video", "kling_queued", f"shot_{_sid:02d}")
                 elif status == "processing":
-                    self._on_progress("frame_to_video", "kling_active",  f"shot_{_sid:02d}")
+                    self._on_progress("frame_to_video", "kling_active", f"shot_{_sid:02d}")
 
             try:
                 motion_prompt = motion_map.get(sid, "")
@@ -334,14 +350,54 @@ class PipelineOrchestrator:
                     logger.warning(f"  shot_{sid:02d} 无视频 URL")
                     results.append({"shot_id": sid, "success": False, "video_path": ""})
                     continue
-
                 video_path = str(output_dir / f"shot_{sid:02d}.mp4")
                 client.download_video(video_url, video_path)
                 results.append({"shot_id": sid, "success": True, "video_path": video_path})
                 logger.info(f"  shot_{sid:02d} ✓ → {video_path}")
-
             except Exception as e:
                 logger.warning(f"  shot_{sid:02d} Kling 失败: {e}")
+                results.append({"shot_id": sid, "success": False, "video_path": ""})
+
+        return results
+
+    def _generate_videos_veo(
+        self, shot_ids: list[int], frame_paths: dict,
+        motion_map: dict, output_dir: Path, video_model: str,
+    ) -> list[dict]:
+        """VEO 路线（AI导航）。"""
+        from utils.ai_nav_client import get_client
+        from config.settings import VEO_FAST_GROUP_ID, VEO_HQ_GROUP_ID
+
+        group_id = VEO_HQ_GROUP_ID if video_model == "veo_hq" else VEO_FAST_GROUP_ID
+        client   = get_client()
+        results: list[dict] = []
+
+        for sid in shot_ids:
+            frame_path = frame_paths.get(sid, "")
+            if not frame_path:
+                results.append({"shot_id": sid, "success": False, "video_path": ""})
+                continue
+
+            def _on_status(st: str, _sid: int = sid) -> None:
+                if not self._on_progress:
+                    return
+                if st in ("uploading", "submitted", "PENDING"):
+                    self._on_progress("frame_to_video", "kling_queued", f"shot_{_sid:02d}")
+                elif st in ("RUNNING", "processing"):
+                    self._on_progress("frame_to_video", "kling_active", f"shot_{_sid:02d}")
+
+            try:
+                motion_prompt = motion_map.get(sid, "")
+                video_path    = str(output_dir / f"shot_{sid:02d}.mp4")
+                result = client.generate_video_veo(
+                    frame_path, prompt=motion_prompt,
+                    group_id=group_id, output_path=video_path,
+                    timeout=300.0, on_status=_on_status,
+                )
+                results.append({"shot_id": sid, "success": True, "video_path": result["video_path"]})
+                logger.info(f"  shot_{sid:02d} VEO ✓ → {video_path}")
+            except Exception as e:
+                logger.warning(f"  shot_{sid:02d} VEO 失败: {e}")
                 results.append({"shot_id": sid, "success": False, "video_path": ""})
 
         return results

@@ -27,10 +27,12 @@ class PipelineWorker(QThread):
     pipeline_done  = Signal(dict)   # renamed: avoids shadowing QThread.finished
     error          = Signal(str)
 
-    def __init__(self, sellpoint_text: str, image_paths: list[str], task_name: str = ""):
+    def __init__(self, sellpoint_text: str, image_paths: list[str], task_name: str = "", video_model: str = "kling", kling_mode: str = "std"):
         super().__init__()
         self.sellpoint_text = sellpoint_text
         self.image_paths = image_paths
+        self.video_model = video_model
+        self.kling_mode  = kling_mode
         # Sanitize task_name for filesystem; fall back to timestamp
         safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', task_name).strip('. ')
         self.task_name = safe if safe else f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -77,7 +79,9 @@ class PipelineWorker(QThread):
 
         initial_input = {
             "sellpoint_text": self.sellpoint_text,
-            "task_name": task_id,
+            "task_name":  task_id,
+            "video_model": self.video_model,
+            "kling_mode":  self.kling_mode,
             "reference_image_dir": str(input_dir),
             "bgm_dir": str(MUSIC_DIR) if MUSIC_DIR.exists() else "",
             "font_dir": str(FONTS_DIR) if FONTS_DIR.exists() else "",

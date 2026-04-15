@@ -304,6 +304,7 @@ class AiNavClient:
         *,
         poll_interval: float = 3.0,
         timeout: float = 180.0,
+        on_status_change=None,
     ) -> dict:
         """轮询等待任务完成。
 
@@ -315,10 +316,16 @@ class AiNavClient:
             RuntimeError: 任务失败或取消。
         """
         deadline = time.time() + timeout
+        last_status = None
 
         while time.time() < deadline:
             result = self.get_task(task_id)
             status = result["status"]
+
+            if status != last_status:
+                last_status = status
+                if on_status_change:
+                    on_status_change(result["status_name"])
 
             if status == 2:  # SUCCESS
                 logger.info(
@@ -340,10 +347,77 @@ class AiNavClient:
 
         raise TimeoutError(f"任务 {task_id} 超时 ({timeout}s)")
 
+    def generate_video_veo(
+        self,
+        image_path: str,
+        prompt: str = "",
+        *,
+        group_id: int | None = None,
+        output_path: str = "",
+        timeout: float = 300.0,
+        on_status=None,
+    ) -> dict:
+        """用 VEO 模型生成视频（图生视频）。
 
-# Singleton
-ai_nav_client = AiNavClient.__new__(AiNavClient)
-ai_nav_client.__class__ = AiNavClient
+        Args:
+            image_path: 本地帧图路径（自动上传到 CDN）。
+            prompt: 运镜/动作提示词。
+            group_id: VEO group，默认用 settings.VEO_FAST_GROUP_ID。
+            output_path: 视频保存路径（空则不下载）。
+            on_status: 状态回调 callable(status_str)。
+
+        Returns:
+            {"video_url": str, "video_path": str | None, "task_id": str}
+        """
+        if group_id is None:
+            group_id = settings.VEO_FAST_GROUP_ID
+
+        # 1. 上传帧图
+        logger.info(f"[VEO] 上传帧图: {Path(image_path).name}")
+        if on_status:
+            on_status("uploading")
+        image_url = self.upload_image(image_path)
+
+        # 2. 提交生视频任务
+        url = f"{self.base_url}/web/ai/invoke/tasks"
+        payload = {
+            "appId":   settings.AI_NAV_IMAGE_APP_ID,
+            "groupId": group_id,
+            "params":  {
+                "image":        [image_url],
+                "prompt":       prompt or "smooth cinematic motion",
+                "aspect_ratio": "16:9",
+            },
+        }
+        logger.info(f"[VEO] 提交任务: group={group_id} prompt={prompt[:60]}")
+        if on_status:
+            on_status("submitted")
+
+        task_id = self._submit_task(url, payload)
+
+        # 3. 轮询等待
+        result = self.wait_for_task(task_id, timeout=timeout, on_status_change=on_status)
+
+        video_url = result.get("result_urls", [None])[0] or ""
+        if not video_url:
+            raise ValueError(f"VEO 返回空视频 URL: {result}")
+
+        # 4. 下载（可选）
+        video_path = None
+        if output_path and video_url:
+            import requests as _req
+            p = Path(output_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            logger.info(f"[VEO] 下载视频: {video_url[:80]}...")
+            resp = _req.get(video_url, timeout=(10, 120), stream=True)
+            resp.raise_for_status()
+            with open(p, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            video_path = str(p)
+            logger.info(f"[VEO] 下载完成: {p}")
+
+        return {"video_url": video_url, "video_path": video_path, "task_id": task_id}
 
 
 def get_client(**kwargs) -> AiNavClient:
