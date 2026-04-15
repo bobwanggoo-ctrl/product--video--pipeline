@@ -1705,7 +1705,6 @@ class MainWindow(QMainWindow):
         ]
 
         popup = QFrame(self, Qt.Popup | Qt.FramelessWindowHint)
-        popup.setAttribute(Qt.WA_TranslucentBackground)
         popup.setFixedWidth(160)
         popup.setStyleSheet(f"""
             QFrame#popupCard {{
