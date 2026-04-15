@@ -1723,8 +1723,8 @@ class MainWindow(QMainWindow):
             }}
         """)
         glass_lay = QVBoxLayout(glass)
-        glass_lay.setContentsMargins(5, 5, 5, 5)
-        glass_lay.setSpacing(3)
+        glass_lay.setContentsMargins(4, 4, 4, 4)
+        glass_lay.setSpacing(2)
         outer.addWidget(glass)
 
         def _choose(vm, km, s):
@@ -1745,25 +1745,25 @@ class MainWindow(QMainWindow):
             is_sel = (self._video_model == vm and self._kling_mode == km)
 
             card = QPushButton(label)
-            card.setFixedHeight(28)
+            card.setFixedHeight(24)
             card.setCursor(Qt.PointingHandCursor)
             if is_sel:
                 card.setStyleSheet("""
                     QPushButton {
-                        background: #3A3A3C; color: white;
-                        font-size: 11px; font-weight: 600;
-                        border: none; border-radius: 7px;
-                        text-align: center;
+                        background: #6D6D6F; color: white;
+                        font-size: 10px; font-weight: 600;
+                        border: none; border-radius: 6px;
+                        text-align: center; padding: 0 6px;
                     }
-                    QPushButton:hover { background: #2C2C2E; }
+                    QPushButton:hover { background: #5E5E60; }
                 """)
             else:
                 card.setStyleSheet(f"""
                     QPushButton {{
                         background: white; color: {TEXT_PRIMARY};
-                        font-size: 11px; font-weight: 500;
-                        border: none; border-radius: 7px;
-                        text-align: center;
+                        font-size: 10px; font-weight: 500;
+                        border: none; border-radius: 6px;
+                        text-align: center; padding: 0 6px;
                     }}
                     QPushButton:hover {{ background: #F0F0F5; }}
                 """)
