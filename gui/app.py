@@ -1692,10 +1692,9 @@ class MainWindow(QMainWindow):
             subprocess.Popen(["xdg-open", target])
 
     def _on_model_select(self):
-        """视频模型切换 — 自定义卡片弹窗（与进度界面风格一致）。"""
-        from PySide6.QtWidgets import QFrame, QVBoxLayout, QPushButton, QHBoxLayout
+        """视频模型切换 — 紧凑卡片弹窗。"""
+        from PySide6.QtWidgets import QFrame, QVBoxLayout
         from PySide6.QtCore import Qt, QPoint
-        from PySide6.QtGui import QColor, QPainter, QPainterPath
 
         _OPTIONS = [
             ("kling",    "std",  "KLING-STD"),
@@ -1707,95 +1706,79 @@ class MainWindow(QMainWindow):
 
         popup = QFrame(self, Qt.Popup | Qt.FramelessWindowHint)
         popup.setAttribute(Qt.WA_TranslucentBackground)
+        popup.setFixedWidth(160)
         popup.setStyleSheet(f"""
             QFrame#popupCard {{
                 background: {BG};
                 border: 1px solid {BORDER};
-                border-radius: 12px;
+                border-radius: 10px;
             }}
         """)
         popup.setObjectName("popupCard")
 
         outer = QVBoxLayout(popup)
-        outer.setContentsMargins(8, 8, 8, 8)
-        outer.setSpacing(4)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(3)
 
-        chosen_ref = [None]   # mutable capture
+        chosen_ref = [None]
 
         for opt in _OPTIONS:
             if opt is None:
                 sep = QFrame()
                 sep.setFrameShape(QFrame.HLine)
-                sep.setStyleSheet(f"color: {BORDER}; margin: 2px 4px;")
+                sep.setFixedHeight(1)
+                sep.setStyleSheet(f"background: {BORDER}; border: none; margin: 1px 0;")
                 outer.addWidget(sep)
                 continue
 
             vm, km, label = opt
-            is_selected = (self._video_model == vm and self._kling_mode == km)
+            is_sel = (self._video_model == vm and self._kling_mode == km)
 
             btn = QPushButton()
-            btn.setFixedHeight(36)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            btn.setFixedHeight(30)
             btn.setCursor(Qt.PointingHandCursor)
 
-            # 左侧圆点 + 文字用 HBox 构建
             row = QHBoxLayout(btn)
-            row.setContentsMargins(12, 0, 12, 0)
-            row.setSpacing(10)
+            row.setContentsMargins(8, 0, 8, 0)
+            row.setSpacing(7)
 
             dot = QLabel()
-            dot.setFixedSize(16, 16)
-            if is_selected:
-                dot.setStyleSheet(f"""
-                    background: {ACCENT}; border-radius: 8px;
-                    border: 2px solid {ACCENT};
-                """)
-            else:
-                dot.setStyleSheet(f"""
-                    background: transparent; border-radius: 8px;
-                    border: 2px solid {BORDER};
-                """)
+            dot.setFixedSize(12, 12)
+            dot.setStyleSheet(
+                f"background:{ACCENT}; border-radius:6px;" if is_sel
+                else f"background:transparent; border:2px solid {BORDER}; border-radius:6px;"
+            )
             row.addWidget(dot)
 
             lbl = QLabel(label)
-            if is_selected:
-                lbl.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {ACCENT};")
-            else:
-                lbl.setStyleSheet(f"font-size: 12px; color: {TEXT_PRIMARY};")
+            lbl.setStyleSheet(
+                f"font-size:11px; font-weight:600; color:{ACCENT};" if is_sel
+                else f"font-size:11px; color:{TEXT_PRIMARY};"
+            )
             row.addWidget(lbl, 1)
 
-            # 卡片背景
-            if is_selected:
-                btn.setStyleSheet(f"""
-                    QPushButton {{ background: white; border: 1.5px solid {ACCENT};
-                                   border-radius: 8px; }}
-                    QPushButton:hover {{ background: #F0F6FF; }}
-                """)
-            else:
-                btn.setStyleSheet(f"""
-                    QPushButton {{ background: {CARD_BG}; border: 1px solid transparent;
-                                   border-radius: 8px; }}
-                    QPushButton:hover {{ background: #EBEBF0; border-color: {BORDER}; }}
-                """)
+            btn.setStyleSheet(
+                f"QPushButton{{background:white; border:1px solid {ACCENT}; border-radius:7px;}}"
+                f"QPushButton:hover{{background:#F0F6FF;}}"
+                if is_sel else
+                f"QPushButton{{background:{CARD_BG}; border:none; border-radius:7px;}}"
+                f"QPushButton:hover{{background:#EBEBF0;}}"
+            )
 
-            def _make_cb(v, k, s):
-                def _cb():
+            def _cb(v, k, s):
+                def _f():
                     chosen_ref[0] = (v, k, s)
                     popup.close()
-                return _cb
+                return _f
 
-            btn.clicked.connect(_make_cb(vm, km, label))
+            btn.clicked.connect(_cb(vm, km, label))
             outer.addWidget(btn)
 
         popup.adjustSize()
-
-        # 定位到按钮正下方
-        btn_global = self._model_btn.mapToGlobal(QPoint(0, self._model_btn.height() + 4))
-        popup.move(btn_global)
+        pos = self._model_btn.mapToGlobal(QPoint(0, self._model_btn.height() + 3))
+        popup.move(pos)
         popup.show()
-        popup.setFocus()
 
-        # 等待关闭（Qt.Popup 会在点外部时自动 close）
         loop = __import__("PySide6.QtCore", fromlist=["QEventLoop"]).QEventLoop()
         popup.destroyed.connect(loop.quit)
         loop.exec()
