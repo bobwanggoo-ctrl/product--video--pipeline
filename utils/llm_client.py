@@ -89,33 +89,20 @@ class LLMClient:
     ) -> str:
         """Call multimodal LLM with images.
 
-        路由优先级与 call() 一致：AI导航优先，tu-zi 兜底。
+        Vision 路线：tu-zi（reverse_prompt）主路，AI导航仅在显式指定时使用。
+        原因：AI导航 group=13 仅支持纯文本，multimodal 请求会永久 PENDING。
         """
         choice = (preferred_llm or "").strip().lower()
 
-        if choice in ("reverse", "reverse_prompt", "tuzi"):
-            return self._call_reverse_prompt_vision(prompt, image_base64_list, max_tokens)
+        # 显式指定 AI导航 时才走 AI导航 Vision
+        if choice in ("ai_nav", "ainav"):
+            return self._call_ai_nav_vision_with_retry(prompt, image_base64_list, max_tokens)
 
-        # AI导航优先
-        if settings.AI_NAV_TOKEN:
-            try:
-                return self._call_ai_nav_vision_with_retry(
-                    prompt, image_base64_list, max_tokens
-                )
-            except Exception as e:
-                if choice in ("ai_nav", "ainav"):
-                    raise
-                logger.warning(
-                    f"[Vision] AI导航 {_AINAV_MAX_ATTEMPTS} 次均失败，切换 tu-zi: {e}"
-                )
-                if settings.REVERSE_PROMPT_API_KEY:
-                    return self._call_reverse_prompt_vision(prompt, image_base64_list, max_tokens)
-                raise
-
+        # 默认 + reverse_prompt 显式：走 tu-zi
         if settings.REVERSE_PROMPT_API_KEY:
             return self._call_reverse_prompt_vision(prompt, image_base64_list, max_tokens)
 
-        raise ValueError("No LLM API configured.")
+        raise ValueError("No Vision LLM configured. Set REVERSE_PROMPT_API_KEY in .env")
 
     # ── AI导航（含重试）────────────────────────────────
 
