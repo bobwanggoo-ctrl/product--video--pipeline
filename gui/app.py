@@ -1692,63 +1692,116 @@ class MainWindow(QMainWindow):
             subprocess.Popen(["xdg-open", target])
 
     def _on_model_select(self):
-        """视频模型切换菜单。"""
-        from PySide6.QtWidgets import QMenu
-        from PySide6.QtGui import QAction
+        """视频模型切换 — 自定义卡片弹窗（与进度界面风格一致）。"""
+        from PySide6.QtWidgets import QFrame, QVBoxLayout, QPushButton, QHBoxLayout
+        from PySide6.QtCore import Qt, QPoint
+        from PySide6.QtGui import QColor, QPainter, QPainterPath
 
-        # (video_model, kling_mode, 菜单名, 按钮简称)
         _OPTIONS = [
-            ("kling",    "std",  "KLING-STD",  "KLING-STD"),
-            ("kling",    "pro",  "KLING-PRO",  "KLING-PRO"),
+            ("kling",    "std",  "KLING-STD"),
+            ("kling",    "pro",  "KLING-PRO"),
             None,
-            ("veo_fast", "",     "VEO-STD",    "VEO-STD"),
-            ("veo_hq",   "",     "VEO-4K",     "VEO-4K"),
+            ("veo_fast", "",     "VEO-STD"),
+            ("veo_hq",   "",     "VEO-4K"),
         ]
 
-        menu = QMenu(self)
-        menu.setStyleSheet(f"""
-            QMenu {{
+        popup = QFrame(self, Qt.Popup | Qt.FramelessWindowHint)
+        popup.setAttribute(Qt.WA_TranslucentBackground)
+        popup.setStyleSheet(f"""
+            QFrame#popupCard {{
                 background: {BG};
                 border: 1px solid {BORDER};
-                border-radius: 10px;
-                padding: 6px 0;
-            }}
-            QMenu::item {{
-                padding: 7px 32px 7px 20px;
-                font-size: 12px;
-                color: {TEXT_PRIMARY};
-            }}
-            QMenu::item:selected {{
-                background: {CARD_BG};
-                border-radius: 6px;
-            }}
-            QMenu::item:checked {{
-                color: {ACCENT};
-                font-weight: 600;
-            }}
-            QMenu::separator {{
-                height: 1px;
-                background: {BORDER};
-                margin: 4px 12px;
+                border-radius: 12px;
             }}
         """)
+        popup.setObjectName("popupCard")
+
+        outer = QVBoxLayout(popup)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(4)
+
+        chosen_ref = [None]   # mutable capture
 
         for opt in _OPTIONS:
             if opt is None:
-                menu.addSeparator()
+                sep = QFrame()
+                sep.setFrameShape(QFrame.HLine)
+                sep.setStyleSheet(f"color: {BORDER}; margin: 2px 4px;")
+                outer.addWidget(sep)
                 continue
-            vm, km, label, short = opt
-            act = QAction(label, self)
-            act.setCheckable(True)
-            act.setChecked(self._video_model == vm and self._kling_mode == km)
-            act.setData((vm, km, short))
-            menu.addAction(act)
 
-        chosen = menu.exec(self._model_btn.mapToGlobal(
-            self._model_btn.rect().bottomLeft()
-        ))
-        if chosen and chosen.data():
-            vm, km, short = chosen.data()
+            vm, km, label = opt
+            is_selected = (self._video_model == vm and self._kling_mode == km)
+
+            btn = QPushButton()
+            btn.setFixedHeight(36)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            btn.setCursor(Qt.PointingHandCursor)
+
+            # 左侧圆点 + 文字用 HBox 构建
+            row = QHBoxLayout(btn)
+            row.setContentsMargins(12, 0, 12, 0)
+            row.setSpacing(10)
+
+            dot = QLabel()
+            dot.setFixedSize(16, 16)
+            if is_selected:
+                dot.setStyleSheet(f"""
+                    background: {ACCENT}; border-radius: 8px;
+                    border: 2px solid {ACCENT};
+                """)
+            else:
+                dot.setStyleSheet(f"""
+                    background: transparent; border-radius: 8px;
+                    border: 2px solid {BORDER};
+                """)
+            row.addWidget(dot)
+
+            lbl = QLabel(label)
+            if is_selected:
+                lbl.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {ACCENT};")
+            else:
+                lbl.setStyleSheet(f"font-size: 12px; color: {TEXT_PRIMARY};")
+            row.addWidget(lbl, 1)
+
+            # 卡片背景
+            if is_selected:
+                btn.setStyleSheet(f"""
+                    QPushButton {{ background: white; border: 1.5px solid {ACCENT};
+                                   border-radius: 8px; }}
+                    QPushButton:hover {{ background: #F0F6FF; }}
+                """)
+            else:
+                btn.setStyleSheet(f"""
+                    QPushButton {{ background: {CARD_BG}; border: 1px solid transparent;
+                                   border-radius: 8px; }}
+                    QPushButton:hover {{ background: #EBEBF0; border-color: {BORDER}; }}
+                """)
+
+            def _make_cb(v, k, s):
+                def _cb():
+                    chosen_ref[0] = (v, k, s)
+                    popup.close()
+                return _cb
+
+            btn.clicked.connect(_make_cb(vm, km, label))
+            outer.addWidget(btn)
+
+        popup.adjustSize()
+
+        # 定位到按钮正下方
+        btn_global = self._model_btn.mapToGlobal(QPoint(0, self._model_btn.height() + 4))
+        popup.move(btn_global)
+        popup.show()
+        popup.setFocus()
+
+        # 等待关闭（Qt.Popup 会在点外部时自动 close）
+        loop = __import__("PySide6.QtCore", fromlist=["QEventLoop"]).QEventLoop()
+        popup.destroyed.connect(loop.quit)
+        loop.exec()
+
+        if chosen_ref[0]:
+            vm, km, short = chosen_ref[0]
             self._video_model = vm
             self._kling_mode  = km
             self._model_btn.setText(f"模型：{short}  ▾")
