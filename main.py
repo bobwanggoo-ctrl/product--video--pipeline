@@ -111,6 +111,8 @@ def main():
     """Main pipeline entry point."""
     parser = argparse.ArgumentParser(description="Product Video Pipeline")
     parser.add_argument("--auto", action="store_true", help="全自动模式（无人值守）")
+    parser.add_argument("--folder", type=str, help="直接指定输入文件夹路径，跳过交互选择")
+    parser.add_argument("--yes", "-y", action="store_true", help="自动确认，不提示")
     args = parser.parse_args()
 
     mode = "full_auto" if args.auto else "semi_auto"
@@ -136,17 +138,23 @@ def main():
 
     # 2. Collect input
     print("--- 输入配置 ---")
-    input_dirs = _list_input_dirs()
-    if input_dirs:
-        print("可用输入目录:")
-        for i, d in enumerate(input_dirs):
-            print(f"  [{i + 1}] {d.name}")
-        idx = input(f"\n选择输入目录 [默认: 1]: ").strip()
-        idx = int(idx) if idx.isdigit() and 1 <= int(idx) <= len(input_dirs) else 1
-        input_dir = input_dirs[idx - 1]
+    if args.folder:
+        input_dir = Path(args.folder)
+        if not input_dir.exists():
+            print(f"[!] 目录不存在: {input_dir}")
+            return
     else:
-        input_path = input("输入目录路径: ").strip()
-        input_dir = Path(input_path)
+        input_dirs = _list_input_dirs()
+        if input_dirs:
+            print("可用输入目录:")
+            for i, d in enumerate(input_dirs):
+                print(f"  [{i + 1}] {d.name}")
+            idx = input(f"\n选择输入目录 [默认: 1]: ").strip()
+            idx = int(idx) if idx.isdigit() and 1 <= int(idx) <= len(input_dirs) else 1
+            input_dir = input_dirs[idx - 1]
+        else:
+            input_path = input("输入目录路径: ").strip()
+            input_dir = Path(input_path)
 
     if not input_dir.exists():
         print(f"[!] 目录不存在: {input_dir}")
@@ -170,7 +178,7 @@ def main():
     if not ref_images:
         print("[!] 未找到参考图，Skill 2 生图质量可能受影响")
 
-    confirm = input("\n确认开始? [Y/n] ").strip().lower()
+    confirm = input("\n确认开始? [Y/n] ").strip().lower() if not args.yes else "y"
     if confirm == "n":
         print("已取消")
         return
