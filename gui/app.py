@@ -1692,7 +1692,7 @@ class MainWindow(QMainWindow):
             subprocess.Popen(["xdg-open", target])
 
     def _on_model_select(self):
-        """视频模型切换 — 紧凑卡片弹窗。"""
+        """视频模型切换 — 毛玻璃卡片弹窗。"""
         from PySide6.QtWidgets import QFrame, QVBoxLayout
         from PySide6.QtCore import Qt, QPoint
 
@@ -1704,89 +1704,78 @@ class MainWindow(QMainWindow):
             ("veo_hq",   "",     "VEO-4K"),
         ]
 
+        # ── 弹窗容器（毛玻璃）──
         popup = QFrame(self, Qt.Popup | Qt.FramelessWindowHint)
-        popup.setFixedWidth(160)
-        popup.setStyleSheet(f"""
-            QFrame#popupCard {{
-                background: {BG};
-                border: 1px solid {BORDER};
-                border-radius: 10px;
-            }}
-        """)
-        popup.setObjectName("popupCard")
+        popup.setAttribute(Qt.WA_TranslucentBackground)
+        popup.setFixedWidth(self._model_btn.width())
 
         outer = QVBoxLayout(popup)
         outer.setContentsMargins(6, 6, 6, 6)
-        outer.setSpacing(3)
+        outer.setSpacing(4)
 
-        chosen_ref = [None]
+        # 毛玻璃背景卡（包裹所有选项）
+        glass = QFrame(popup)
+        glass.setStyleSheet(f"""
+            QFrame {{
+                background: rgba(245, 245, 247, 210);
+                border: 1px solid rgba(210,210,215,180);
+                border-radius: 10px;
+            }}
+        """)
+        glass_lay = QVBoxLayout(glass)
+        glass_lay.setContentsMargins(5, 5, 5, 5)
+        glass_lay.setSpacing(3)
+        outer.addWidget(glass)
+
+        def _choose(vm, km, s):
+            self._video_model = vm
+            self._kling_mode  = km
+            self._model_btn.setText(f"模型：{s}  ▾")
+            popup.close()
 
         for opt in _OPTIONS:
             if opt is None:
                 sep = QFrame()
-                sep.setFrameShape(QFrame.HLine)
                 sep.setFixedHeight(1)
-                sep.setStyleSheet(f"background: {BORDER}; border: none; margin: 1px 0;")
-                outer.addWidget(sep)
+                sep.setStyleSheet("background: rgba(210,210,215,130); border: none;")
+                glass_lay.addWidget(sep)
                 continue
 
             vm, km, label = opt
             is_sel = (self._video_model == vm and self._kling_mode == km)
 
-            btn = QPushButton()
-            btn.setFixedHeight(30)
-            btn.setCursor(Qt.PointingHandCursor)
-
-            row = QHBoxLayout(btn)
-            row.setContentsMargins(8, 0, 8, 0)
-            row.setSpacing(7)
-
-            dot = QLabel()
-            dot.setFixedSize(12, 12)
-            dot.setStyleSheet(
-                f"background:{ACCENT}; border-radius:6px;" if is_sel
-                else f"background:transparent; border:2px solid {BORDER}; border-radius:6px;"
+            card = QPushButton(label)
+            card.setFixedHeight(28)
+            card.setCursor(Qt.PointingHandCursor)
+            if is_sel:
+                card.setStyleSheet("""
+                    QPushButton {
+                        background: #3A3A3C; color: white;
+                        font-size: 11px; font-weight: 600;
+                        border: none; border-radius: 7px;
+                        text-align: center;
+                    }
+                    QPushButton:hover { background: #2C2C2E; }
+                """)
+            else:
+                card.setStyleSheet(f"""
+                    QPushButton {{
+                        background: white; color: {TEXT_PRIMARY};
+                        font-size: 11px; font-weight: 500;
+                        border: none; border-radius: 7px;
+                        text-align: center;
+                    }}
+                    QPushButton:hover {{ background: #F0F0F5; }}
+                """)
+            card.clicked.connect(
+                lambda checked=False, v=vm, k=km, s=label: _choose(v, k, s)
             )
-            row.addWidget(dot)
-
-            lbl = QLabel(label)
-            lbl.setStyleSheet(
-                f"font-size:11px; font-weight:600; color:{ACCENT};" if is_sel
-                else f"font-size:11px; color:{TEXT_PRIMARY};"
-            )
-            row.addWidget(lbl, 1)
-
-            btn.setStyleSheet(
-                f"QPushButton{{background:white; border:1px solid {ACCENT}; border-radius:7px;}}"
-                f"QPushButton:hover{{background:#F0F6FF;}}"
-                if is_sel else
-                f"QPushButton{{background:{CARD_BG}; border:none; border-radius:7px;}}"
-                f"QPushButton:hover{{background:#EBEBF0;}}"
-            )
-
-            def _cb(v, k, s):
-                def _f():
-                    chosen_ref[0] = (v, k, s)
-                    popup.close()
-                return _f
-
-            btn.clicked.connect(_cb(vm, km, label))
-            outer.addWidget(btn)
+            glass_lay.addWidget(card)
 
         popup.adjustSize()
         pos = self._model_btn.mapToGlobal(QPoint(0, self._model_btn.height() + 3))
         popup.move(pos)
         popup.show()
-
-        loop = __import__("PySide6.QtCore", fromlist=["QEventLoop"]).QEventLoop()
-        popup.destroyed.connect(loop.quit)
-        loop.exec()
-
-        if chosen_ref[0]:
-            vm, km, short = chosen_ref[0]
-            self._video_model = vm
-            self._kling_mode  = km
-            self._model_btn.setText(f"模型：{short}  ▾")
 
     def _on_open_settings(self):
         """并发设置弹窗 — 运行时调整 Kling 槽位数和 pipeline 并发数。"""
