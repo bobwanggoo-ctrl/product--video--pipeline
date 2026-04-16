@@ -1382,6 +1382,54 @@ class RightPanel(QWidget):
             self._aspect_container.updateGeometry()
 
 
+# ── Panel Toggle Button ───────────────────────────────────────
+class _PanelToggleBtn(QWidget):
+    """左右面板之间的折叠/展开三角按钮。"""
+    clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(14)
+        self.setCursor(Qt.PointingHandCursor)
+        self._expanded = True   # 初始：左面板展开
+        self.setToolTip("折叠/展开输入面板")
+
+    def set_expanded(self, expanded: bool):
+        self._expanded = expanded
+        self.update()
+
+    def paintEvent(self, event):
+        from PySide6.QtGui import QPainter, QPainterPath, QColor
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        cx = w / 2
+        cy = h / 2
+        size = 7   # 三角半高
+
+        path = QPainterPath()
+        if self._expanded:
+            # 左箭头 ◀（点击后折叠）
+            path.moveTo(cx + size * 0.5, cy - size)
+            path.lineTo(cx - size * 0.5, cy)
+            path.lineTo(cx + size * 0.5, cy + size)
+        else:
+            # 右箭头 ▶（点击后展开）
+            path.moveTo(cx - size * 0.5, cy - size)
+            path.lineTo(cx + size * 0.5, cy)
+            path.lineTo(cx - size * 0.5, cy + size)
+        path.closeSubpath()
+
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#AEAEB2"))
+        p.drawPath(path)
+        p.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+
+
 # ── Main Window ───────────────────────────────────────────────
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -1489,6 +1537,7 @@ class MainWindow(QMainWindow):
         anim.setEasingCurve(QEasingCurve.OutCubic)
         def _done():
             self.left_panel.hide()
+            self._panel_toggle.set_expanded(False)
             if callback:
                 callback()
         anim.finished.connect(_done)
@@ -1503,9 +1552,19 @@ class MainWindow(QMainWindow):
         anim.setStartValue(0)
         anim.setEndValue(272)
         anim.setEasingCurve(QEasingCurve.OutCubic)
-        anim.finished.connect(lambda: self.left_panel.setMaximumWidth(16777215))
+        def _done():
+            self.left_panel.setMaximumWidth(16777215)
+            self._panel_toggle.set_expanded(True)
+        anim.finished.connect(_done)
         anim.start()
         self._panel_anim = anim
+
+    def _on_panel_toggle(self):
+        """三角按钮点击：折叠/展开左面板。"""
+        if self.left_panel.isVisible():
+            self._collapse_left_panel()
+        else:
+            self._expand_left_panel()
 
     def _save_current(self):
         if not (0 <= self._current_idx < len(self._tasks)):
@@ -1694,6 +1753,11 @@ class MainWindow(QMainWindow):
         self.left_panel = LeftPanel()
         self.left_panel.setFixedWidth(272)
         content.addWidget(self.left_panel)
+
+        # 折叠/展开三角按钮（夹在左右面板之间）
+        self._panel_toggle = _PanelToggleBtn()
+        self._panel_toggle.clicked.connect(self._on_panel_toggle)
+        content.addWidget(self._panel_toggle)
 
         self.right_panel = RightPanel()
         content.addWidget(self.right_panel, 1)
