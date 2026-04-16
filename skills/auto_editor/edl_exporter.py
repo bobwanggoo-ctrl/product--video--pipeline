@@ -70,8 +70,7 @@ def export_jianying_draft(
             volume=1.0,
         )
         script.add_segment(seg)
-        overlap = clip.transition_duration if clip.transition_out != "cut" else 0.0
-        current_t += duration - overlap
+        current_t += duration   # 剪映草稿片段顺序排列，不做重叠（转场由 FFmpeg 处理）
 
     # ── BGM 音频轨道 ──
     if timeline.bgm_path and Path(timeline.bgm_path).exists():
@@ -108,8 +107,7 @@ def export_jianying_draft(
                     border=border,
                 )
                 script.add_segment(text_seg)
-            overlap = clip.transition_duration if clip.transition_out != "cut" else 0.0
-            current_t += duration - overlap
+            current_t += duration   # 字幕轨同步，不做重叠
 
     script.save()
 
