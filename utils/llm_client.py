@@ -42,42 +42,13 @@ class LLMClient:
         max_tokens: int = 8192,
         json_mode: bool = True,
     ) -> str:
-        """Call LLM (text only) and return raw text response.
-
-        Args:
-            preferred_llm: 'ai_nav' 强制用AI导航 | 'reverse_prompt'/'tuzi' 强制用tu-zi | None 自动
-        """
-        choice = (preferred_llm or "").strip().lower()
-
-        if choice in ("reverse", "reverse_prompt", "tuzi"):
-            return self._call_reverse_prompt(
-                system_prompt, user_message, temperature, max_tokens, json_mode
-            )
-
-        # AI导航优先（包含 choice=="ai_nav" 和 auto 两种情况）
+        """Call LLM (text only) — 走 AI导航 group=13，tu-zi 已停用。"""
+        # AI导航（唯一路线）
         if settings.AI_NAV_TOKEN:
-            try:
-                return self._call_ai_nav_with_retry(
-                    system_prompt, user_message, temperature, max_tokens, json_mode
-                )
-            except Exception as e:
-                if choice in ("ai_nav", "ainav"):
-                    raise  # 显式指定 ai_nav → 不降级，直接报错
-                logger.warning(
-                    f"[LLM] AI导航 {_AINAV_MAX_ATTEMPTS} 次均失败，切换 tu-zi: {e}"
-                )
-                if settings.REVERSE_PROMPT_API_KEY:
-                    return self._call_reverse_prompt(
-                        system_prompt, user_message, temperature, max_tokens, json_mode
-                    )
-                raise
-
-        if settings.REVERSE_PROMPT_API_KEY:
-            return self._call_reverse_prompt(
+            return self._call_ai_nav_with_retry(
                 system_prompt, user_message, temperature, max_tokens, json_mode
             )
-
-        raise ValueError("No LLM API configured. Set AI_NAV_TOKEN or REVERSE_PROMPT_API_KEY in .env")
+        raise ValueError("AI_NAV_TOKEN 未配置，请在 .env 中设置")
 
     def call_vision(
         self,
@@ -89,25 +60,20 @@ class LLMClient:
     ) -> str:
         """Call multimodal LLM with images.
 
-        Vision 路线：
-        1. 先用 navigation-ai skill 上传图片 → 拿 CDN URL（token 自动管理）
-        2. 再用 tu-zi 发 Vision 请求（URL 替代 base64，请求体更轻）
-        AI导航 group=13 不支持多模态，仅在显式指定时尝试。
+        路线：skill 上传图片 → CDN URL → AI导航 group=13 Vision 请求。
         """
-        choice = (preferred_llm or "").strip().lower()
+        # 1. 上传图片拿 CDN URL
+        cdn_urls = self._upload_images_via_skill(image_base64_list)
+        if not cdn_urls:
+            raise RuntimeError("Vision 图片上传失败，无法继续")
 
-        if choice in ("ai_nav", "ainav"):
-            return self._call_ai_nav_vision_with_retry(prompt, image_base64_list, max_tokens)
-
-        # 默认路线：skill 上传图片 → tu-zi Vision
-        if settings.REVERSE_PROMPT_API_KEY:
-            # 尝试通过 skill 上传图片拿 CDN URL，失败则降级用 base64
-            cdn_urls = self._upload_images_via_skill(image_base64_list)
-            if cdn_urls:
-                return self._call_reverse_prompt_vision_urls(prompt, cdn_urls, max_tokens)
-            return self._call_reverse_prompt_vision(prompt, image_base64_list, max_tokens)
-
-        raise ValueError("No Vision LLM configured. Set REVERSE_PROMPT_API_KEY in .env")
+        # 2. AI导航 group=13 Vision（CDN URL 方式）
+        return self._call_ai_nav_vision_with_retry(
+            prompt,
+            image_base64_list,   # 保留 base64 参数签名兼容性
+            max_tokens,
+            image_urls=cdn_urls, # 实际用 CDN URL
+        )
 
     def _upload_images_via_skill(self, image_base64_list: list[str]) -> list[str]:
         """用 navigation-ai skill 上传图片，返回 CDN URL 列表。失败返回空列表。"""
@@ -235,12 +201,13 @@ class LLMClient:
         prompt: str,
         image_base64_list: list[str],
         max_tokens: int,
+        image_urls: list[str] | None = None,
     ) -> str:
         """AI导航 Vision 调用，失败时指数退避重试最多 _AINAV_MAX_ATTEMPTS 次。"""
         last_exc: Exception | None = None
         for attempt in range(1, _AINAV_MAX_ATTEMPTS + 1):
             try:
-                return self._call_ai_nav_vision(prompt, image_base64_list, max_tokens)
+                return self._call_ai_nav_vision(prompt, image_base64_list, max_tokens, image_urls=image_urls)
             except Exception as e:
                 last_exc = e
                 if attempt < _AINAV_MAX_ATTEMPTS:
@@ -288,21 +255,27 @@ class LLMClient:
         prompt: str,
         image_base64_list: list[str],
         max_tokens: int,
+        image_urls: list[str] | None = None,
     ) -> str:
-        """单次 AI导航 Vision 调用（multimodal messages 格式 + 异步轮询）。"""
+        """单次 AI导航 Vision 调用。
+
+        image_urls 优先（CDN URL，请求体轻）；未传时降级用 base64。
+        """
         from utils.ai_nav_client import AiNavClient
 
         client = AiNavClient(purpose="llm")
         started_at = time.perf_counter()
-        logger.info(f"[Vision][START][AiNav] images={len(image_base64_list)}")
 
-        image_urls = [
+        # 优先用 CDN URL，否则用 base64
+        urls = image_urls or [
             f"data:image/jpeg;base64,{img}" for img in image_base64_list
         ]
+        logger.info(f"[Vision][START][AiNav] images={len(urls)} url_mode={bool(image_urls)}")
+
         task_id = client.create_llm_task(
             system_prompt="",
             user_message=prompt,
-            image_urls=image_urls,
+            image_urls=urls,
         )
         result = client.wait_for_task(task_id, timeout=240.0)
 
