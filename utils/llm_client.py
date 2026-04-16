@@ -103,6 +103,117 @@ class LLMClient:
 
         return urls if len(urls) == len(image_base64_list) else []
 
+    # ── AI导航（含重试）────────────────────────────────
+
+    def _call_ai_nav_with_retry(
+        self,
+        system_prompt: str,
+        user_message: str,
+        temperature: float,
+        max_tokens: int,
+        json_mode: bool,
+    ) -> str:
+        """AI导航文本调用，失败时指数退避重试最多 _AINAV_MAX_ATTEMPTS 次。"""
+        last_exc: Exception | None = None
+        for attempt in range(1, _AINAV_MAX_ATTEMPTS + 1):
+            try:
+                return self._call_ai_nav(
+                    system_prompt, user_message, temperature, max_tokens, json_mode
+                )
+            except Exception as e:
+                last_exc = e
+                if attempt < _AINAV_MAX_ATTEMPTS:
+                    delay = _AINAV_RETRY_DELAYS[attempt - 1]
+                    logger.warning(f"[LLM][AiNav] attempt={attempt} 失败，{delay}s 后重试: {e}")
+                    time.sleep(delay)
+        raise RuntimeError(f"AI导航文本调用 {_AINAV_MAX_ATTEMPTS} 次全部失败: {last_exc}") from last_exc
+
+    def _call_ai_nav_vision_with_retry(
+        self,
+        prompt: str,
+        image_base64_list: list[str],
+        max_tokens: int,
+        image_urls: list[str] | None = None,
+    ) -> str:
+        """AI导航 Vision 调用，失败时指数退避重试最多 _AINAV_MAX_ATTEMPTS 次。"""
+        last_exc: Exception | None = None
+        for attempt in range(1, _AINAV_MAX_ATTEMPTS + 1):
+            try:
+                return self._call_ai_nav_vision(
+                    prompt, image_base64_list, max_tokens, image_urls=image_urls
+                )
+            except Exception as e:
+                last_exc = e
+                if attempt < _AINAV_MAX_ATTEMPTS:
+                    delay = _AINAV_RETRY_DELAYS[attempt - 1]
+                    logger.warning(f"[Vision][AiNav] attempt={attempt} 失败，{delay}s 后重试: {e}")
+                    time.sleep(delay)
+        raise RuntimeError(f"AI导航 Vision 调用 {_AINAV_MAX_ATTEMPTS} 次全部失败: {last_exc}") from last_exc
+
+    def _call_ai_nav(
+        self,
+        system_prompt: str,
+        user_message: str,
+        temperature: float,
+        max_tokens: int,
+        json_mode: bool,
+    ) -> str:
+        """单次 AI导航文本调用（params.messages 格式 + 异步轮询）。"""
+        from utils.ai_nav_client import AiNavClient
+
+        client = AiNavClient(purpose="llm")
+        started_at = time.perf_counter()
+        logger.info("[LLM][START][AiNav] group=13 params.messages")
+
+        task_id = client.create_llm_task(
+            system_prompt=system_prompt,
+            user_message=user_message,
+        )
+        result = client.wait_for_task(task_id, timeout=240.0)
+
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.info(f"[LLM][END][AiNav] elapsed_ms={elapsed_ms}")
+
+        text = result.get("result_text", "")
+        if not text:
+            raise ValueError(f"AI导航返回空结果: {result}")
+
+        return normalize_llm_text(text)
+
+    def _call_ai_nav_vision(
+        self,
+        prompt: str,
+        image_base64_list: list[str],
+        max_tokens: int,
+        image_urls: list[str] | None = None,
+    ) -> str:
+        """单次 AI导航 Vision 调用（CDN URL 优先，base64 兜底）。"""
+        from utils.ai_nav_client import AiNavClient
+
+        client = AiNavClient(purpose="llm")
+        started_at = time.perf_counter()
+
+        urls = image_urls or [
+            f"data:image/jpeg;base64,{img}" for img in image_base64_list
+        ]
+        logger.info(f"[Vision][START][AiNav] images={len(urls)} url_mode={bool(image_urls)}")
+
+        task_id = client.create_llm_task(
+            system_prompt="",
+            user_message=prompt,
+            image_urls=urls,
+        )
+        result = client.wait_for_task(task_id, timeout=240.0)
+
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.info(f"[Vision][END][AiNav] elapsed_ms={elapsed_ms}")
+
+        text = result.get("result_text", "")
+        if not text:
+            raise ValueError(f"AI导航 Vision 返回空结果: {result}")
+
+        return normalize_llm_text(text)
+
     def _call_vision_via_skill_stream(self, prompt: str, image_urls: list[str]) -> str:
         """用 navigation-ai skill stream 命令发带图请求（group=13 Vision），含重试。"""
         import subprocess
