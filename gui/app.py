@@ -1634,7 +1634,7 @@ class MainWindow(QMainWindow):
         sellpoint = self.left_panel.get_sellpoint()
         if not sellpoint:
             self.right_panel.show_running()
-            self.right_panel.status_label.setText("请先填写卖点文案")
+            self.right_panel.append_log("❌ 请先填写卖点文案")
             return
 
         images = self.left_panel.get_image_paths()
