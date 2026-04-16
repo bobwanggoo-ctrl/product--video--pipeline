@@ -175,7 +175,7 @@ class LLMClient:
             system_prompt=system_prompt,
             user_message=user_message,
         )
-        result = client.wait_for_task(task_id, timeout=180.0)
+        result = client.wait_for_task(task_id, timeout=240.0)
 
         elapsed_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(f"[LLM][END][AiNav] elapsed_ms={elapsed_ms}")
@@ -207,7 +207,7 @@ class LLMClient:
             user_message=prompt,
             image_urls=image_urls,
         )
-        result = client.wait_for_task(task_id, timeout=180.0)
+        result = client.wait_for_task(task_id, timeout=240.0)
 
         elapsed_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(f"[Vision][END][AiNav] elapsed_ms={elapsed_ms}")

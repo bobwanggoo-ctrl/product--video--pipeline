@@ -100,8 +100,8 @@ def run(
     logger.info("Skill 5 Step 4/4: 组装 + 导出")
     logger.info("=" * 60)
 
-    # SRT 字幕 + 剪映 JSON → {task_name}-附件/ 子目录（与 create_run_dirs 命名一致）
-    other_dir = out_dir / f"{task_name}-附件" if task_name else out_dir / "附件"
+    # SRT 字幕 + 剪映 JSON → {task_name}-files/ 子目录（英文，避免 Windows 路径问题）
+    other_dir = out_dir / f"{task_name}-files" if task_name else out_dir / "files"
     other_dir.mkdir(parents=True, exist_ok=True)
 
     srt_base = task_name if task_name else "subtitles"
