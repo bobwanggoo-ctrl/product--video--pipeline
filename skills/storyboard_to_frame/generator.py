@@ -37,6 +37,8 @@ def generate_frames(
     poll_interval: float = 3.0,
     timeout: float = 180.0,
     error_keywords: dict[int, list[str]] | None = None,
+    on_batch_ready=None,          # Callable[[dict[int, str]], None] | None
+    batch_trigger_size: int = 5,  # 攒够几张时触发一次回调
 ) -> dict:
     """从 storyboard 生成所有 shot 的画面帧。
 
@@ -125,6 +127,8 @@ def generate_frames(
     workers = min(_MAX_CONCURRENT_POLLS, len(task_map))
     logger.info(f"[Skill2] 并发等待 {len(task_map)} 个任务 (max_workers={workers})")
 
+    _pending_batch: dict[int, str] = {}  # 待触发的 batch
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_sid = {
             executor.submit(_poll_and_download, tid, sid): sid
@@ -140,9 +144,21 @@ def generate_frames(
                 logger.info(
                     f"  [{done_count}/{len(task_map)}] shot_{result_sid:02d} ✓ → {Path(path).name}"
                 )
+                # 批次回调：攒够 batch_trigger_size 张就触发一次
+                if on_batch_ready:
+                    _pending_batch[result_sid] = path
+                    if len(_pending_batch) >= batch_trigger_size:
+                        logger.info(f"[Skill2] 触发合规批次: shots={sorted(_pending_batch)}")
+                        on_batch_ready(dict(_pending_batch))
+                        _pending_batch.clear()
             except Exception as e:
                 logger.warning(f"  [{done_count}/{len(task_map)}] shot_{sid:02d} 失败: {e}")
                 poll_failed.append(sid)
+
+    # 收尾：不足 batch_trigger_size 的剩余图也触发一次
+    if on_batch_ready and _pending_batch:
+        logger.info(f"[Skill2] 触发最终批次: shots={sorted(_pending_batch)}")
+        on_batch_ready(dict(_pending_batch))
 
     failed_shots = submit_failed + poll_failed
     logger.info(

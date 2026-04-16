@@ -195,7 +195,7 @@ class PipelineOrchestrator:
     # ── Skill 2 ──────────────────────────────────────
 
     def _run_storyboard_to_frame(self, input_data: dict) -> dict:
-        """Skill 2: 分镜 → 画面帧。"""
+        """Skill 2: 分镜 → 画面帧（不带联动；由 run_all 决定是否用联动模式）。"""
         from skills.storyboard_to_frame.generator import generate_frames
 
         result = generate_frames(
@@ -206,6 +206,79 @@ class PipelineOrchestrator:
             error_keywords=input_data.get("error_keywords"),
         )
         return result
+
+    def _run_skill2_3_interleaved(self, s2_input: dict, s3_ref_dir: str, storyboard) -> tuple[dict, dict]:
+        """Skill 2 + Skill 3 流水线并行：每完成 5 张帧图立即触发一批合规检查。
+
+        两者时间轴重叠，总耗时 ≈ Skill 2 全程（而非 Skill2 + Skill3 叠加）。
+        """
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed as fc
+        from skills.storyboard_to_frame.generator import generate_frames
+        from skills.compliance_checker.checker import (
+            _check_batch_group, _load_reference_images, _get_all_shots, _merge_copyright,
+        )
+        from skills.compliance_checker.copyright_checker import check_copyright_batch
+
+        ref_images = _load_reference_images(s3_ref_dir)
+        shots_info = {s["shot_id"]: s for s in _get_all_shots(storyboard)}
+
+        compliance_futures: list = []
+        lock = threading.Lock()
+        comp_executor = ThreadPoolExecutor(max_workers=3)
+
+        def _on_batch(batch_fp: dict):
+            shot_ids = sorted(batch_fp)
+            si_map   = {sid: shots_info[sid] for sid in shot_ids if sid in shots_info}
+            fut = comp_executor.submit(
+                _check_batch_group, shot_ids, batch_fp, si_map, ref_images, s3_ref_dir,
+            )
+            with lock:
+                compliance_futures.append(fut)
+            if self._on_progress:
+                self._on_progress("compliance_check", "batch_started", f"shots={shot_ids}")
+
+        # Skill 2（带回调，每完成 5 张触发一次 Skill 3 batch）
+        s2_result = generate_frames(
+            storyboard=s2_input["storyboard"],
+            reference_image_dir=s2_input.get("reference_image_dir", str(settings.REFERENCE_IMAGES_DIR)),
+            output_dir=s2_input.get("output_dir", str(settings.FRAMES_DIR)),
+            aspect_ratio=s2_input.get("aspect_ratio", "16:9"),
+            error_keywords=s2_input.get("error_keywords"),
+            on_batch_ready=_on_batch,
+            batch_trigger_size=5,
+        )
+
+        # 等所有合规 batch 完成
+        all_batch: list = []
+        for fut in fc(compliance_futures):
+            try:
+                all_batch.extend(fut.result(timeout=300))
+            except Exception as e:
+                logger.warning(f"[Pipeline] 合规 batch 失败: {e}")
+        comp_executor.shutdown(wait=False)
+
+        # 侵权检测（全量，一次跑完）
+        try:
+            cr_risks = check_copyright_batch(s2_result.get("frame_paths", {}))
+        except Exception as e:
+            logger.warning(f"[Pipeline] 侵权检测失败: {e}")
+            cr_risks = {}
+
+        results      = [cr  for cr, _, _ in all_batch]
+        layout_hints = {cr.shot_id: lh for cr, lh, _ in all_batch if lh}
+        error_kw     = {cr.shot_id: cr.error_keywords for cr, _, _ in all_batch if cr.error_keywords}
+        if cr_risks:
+            _merge_copyright(results, cr_risks, error_kw)
+        results.sort(key=lambda r: r.shot_id)
+
+        s3_result = {
+            "compliance_results": results,
+            "layout_hints":       layout_hints,
+            "error_keywords":     error_kw,
+            "skipped":            False,
+        }
+        return s2_result, s3_result
 
     # ── Skill 3 ────────────────────────────────────────
 
@@ -458,6 +531,42 @@ class PipelineOrchestrator:
 
             if on_progress:
                 on_progress(step.value, "started", "")
+
+            # ── 联动模式：Skill 2 + Skill 3 流水线并行 ──────
+            if step == PipelineStep.STORYBOARD_TO_FRAME:
+                step_order_list = self.STEP_ORDER
+                next_idx = step_order_list.index(step) + 1
+                next_step_is_compliance = (
+                    next_idx < len(step_order_list)
+                    and step_order_list[next_idx] == PipelineStep.COMPLIANCE_CHECK
+                    and self.state.steps["compliance_check"].status
+                        not in (StepStatus.COMPLETED, StepStatus.SKIPPED)
+                )
+                if next_step_is_compliance:
+                    logger.info("[Pipeline] 启用 Skill2+Skill3 流水线并行模式")
+                    try:
+                        s3_ref_dir = self._initial_input.get("reference_image_dir", "")
+                        sb = self.state.steps["sellpoint_to_storyboard"].output_data.get("storyboard")
+                        s2_out, s3_out = self._run_skill2_3_interleaved(input_data, s3_ref_dir, sb)
+                    except Exception as e:
+                        logger.error(f"[Pipeline] Skill2+3 联动失败，回退串行: {e}")
+                        if on_progress:
+                            on_progress(step.value, "failed", str(e))
+                        raise
+
+                    # 存储两步结果，标记 compliance_check 已完成，跳过下轮
+                    self.state.steps["storyboard_to_frame"].output_data = s2_out
+                    self.state.steps["storyboard_to_frame"].status      = StepStatus.COMPLETED
+                    self.state.steps["compliance_check"].output_data    = s3_out
+                    self.state.steps["compliance_check"].status         = StepStatus.COMPLETED
+
+                    if on_progress:
+                        on_progress(step.value, "completed", "")
+                        on_progress("compliance_check", "completed", "")
+
+                    self._save_compliance_report(run_dirs, initial_input)
+                    self.state.save(run_dirs["checkpoint"])
+                    continue
 
             try:
                 result = self.run_step(step, input_data)
