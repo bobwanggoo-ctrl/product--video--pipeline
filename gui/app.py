@@ -1074,6 +1074,95 @@ class RightPanel(QWidget):
 
         done_l.addWidget(video_container, 1)
 
+        # ── 播放控制条 ──────────────────────────────────
+        ctrl_bar = QWidget()
+        ctrl_bar.setFixedHeight(44)
+        ctrl_bar.setStyleSheet(f"background: {CARD_BG}; border-radius: 8px;")
+        ctrl_lay = QHBoxLayout(ctrl_bar)
+        ctrl_lay.setContentsMargins(10, 0, 10, 0)
+        ctrl_lay.setSpacing(8)
+
+        # 播放/暂停
+        self._ctrl_play = QPushButton("▶")
+        self._ctrl_play.setFixedSize(32, 32)
+        self._ctrl_play.setStyleSheet(f"""
+            QPushButton {{ background: {ACCENT}; color: white; border: none;
+                           border-radius: 16px; font-size: 13px; padding-left: 2px; }}
+            QPushButton:hover {{ background: #0062CC; }}
+        """)
+        self._ctrl_play.clicked.connect(self._toggle_play)
+        ctrl_lay.addWidget(self._ctrl_play)
+
+        # 重播
+        self._ctrl_replay = QPushButton("↺")
+        self._ctrl_replay.setFixedSize(28, 28)
+        self._ctrl_replay.setToolTip("从头播放")
+        self._ctrl_replay.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {TEXT_MUTED}; border: none;
+                           border-radius: 14px; font-size: 16px; }}
+            QPushButton:hover {{ background: {BORDER}; color: {TEXT_PRIMARY}; }}
+        """)
+        self._ctrl_replay.clicked.connect(self._replay)
+        ctrl_lay.addWidget(self._ctrl_replay)
+
+        # 当前时间
+        self._time_lbl = QLabel("0:00")
+        self._time_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        self._time_lbl.setFixedWidth(36)
+        ctrl_lay.addWidget(self._time_lbl)
+
+        # 进度条
+        from PySide6.QtWidgets import QSlider
+        from PySide6.QtCore import Qt as _Qt
+        self._seek_bar = QSlider(_Qt.Horizontal)
+        self._seek_bar.setRange(0, 1000)
+        self._seek_bar.setValue(0)
+        self._seek_bar.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
+                height: 4px; background: {BORDER}; border-radius: 2px;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: {ACCENT}; border-radius: 2px;
+            }}
+            QSlider::handle:horizontal {{
+                width: 12px; height: 12px; margin: -4px 0;
+                background: {ACCENT}; border-radius: 6px;
+            }}
+        """)
+        self._seek_bar.sliderPressed.connect(self._seek_start)
+        self._seek_bar.sliderReleased.connect(self._seek_end)
+        self._seek_bar.sliderMoved.connect(self._seek_moved)
+        self._seeking = False
+        ctrl_lay.addWidget(self._seek_bar, 1)
+
+        # 总时长
+        self._dur_lbl = QLabel("0:00")
+        self._dur_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        self._dur_lbl.setFixedWidth(36)
+        ctrl_lay.addWidget(self._dur_lbl)
+
+        # 音量
+        self._vol_btn = QPushButton("🔊")
+        self._vol_btn.setFixedSize(28, 28)
+        self._vol_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; border: none; font-size: 14px; }}
+            QPushButton:hover {{ background: {BORDER}; border-radius: 14px; }}
+        """)
+        self._vol_btn.clicked.connect(self._toggle_mute)
+        ctrl_lay.addWidget(self._vol_btn)
+
+        self._vol_slider = QSlider(_Qt.Horizontal)
+        self._vol_slider.setRange(0, 100)
+        self._vol_slider.setValue(100)
+        self._vol_slider.setFixedWidth(70)
+        self._vol_slider.setStyleSheet(self._seek_bar.styleSheet())
+        self._vol_slider.valueChanged.connect(
+            lambda v: self._audio_output.setVolume(v / 100.0)
+        )
+        ctrl_lay.addWidget(self._vol_slider)
+
+        done_l.addWidget(ctrl_bar)
+
         self.player = QMediaPlayer()
         # Attach audio output for sound
         from PySide6.QtMultimedia import QAudioOutput
@@ -1083,6 +1172,8 @@ class RightPanel(QWidget):
         self.player.setVideoOutput(self.video_widget)
         self.player.hasVideoChanged.connect(self._on_has_video)
         self.player.playbackStateChanged.connect(self._on_playback_state)
+        self.player.positionChanged.connect(self._on_position_changed)
+        self.player.durationChanged.connect(self._on_duration_changed)
 
         # Install event filter on video_container to catch hover
         video_container.setMouseTracking(True)
@@ -1225,6 +1316,52 @@ class RightPanel(QWidget):
     def _on_playback_state(self, state):
         if state == QMediaPlayer.PlayingState:
             self.play_btn.hide()
+            self._ctrl_play.setText("⏸")
+        else:
+            self._ctrl_play.setText("▶")
+
+    def _on_position_changed(self, pos_ms: int):
+        if not self._seeking:
+            dur = self.player.duration()
+            if dur > 0:
+                self._seek_bar.setValue(int(pos_ms / dur * 1000))
+        self._time_lbl.setText(self._fmt_time(pos_ms))
+
+    def _on_duration_changed(self, dur_ms: int):
+        self._dur_lbl.setText(self._fmt_time(dur_ms))
+
+    @staticmethod
+    def _fmt_time(ms: int) -> str:
+        s = ms // 1000
+        return f"{s // 60}:{s % 60:02d}"
+
+    def _seek_start(self):
+        self._seeking = True
+
+    def _seek_end(self):
+        dur = self.player.duration()
+        if dur > 0:
+            self.player.setPosition(int(self._seek_bar.value() / 1000 * dur))
+        self._seeking = False
+
+    def _seek_moved(self, val: int):
+        dur = self.player.duration()
+        if dur > 0:
+            self._time_lbl.setText(self._fmt_time(int(val / 1000 * dur)))
+
+    def _replay(self):
+        self.player.setPosition(0)
+        self.player.play()
+        self.play_btn.hide()
+
+    def _toggle_mute(self):
+        muted = self._audio_output.volume() == 0
+        if muted:
+            self._audio_output.setVolume(self._vol_slider.value() / 100.0 or 1.0)
+            self._vol_btn.setText("🔊")
+        else:
+            self._audio_output.setVolume(0)
+            self._vol_btn.setText("🔇")
 
     # ── Private ───────────────────────────────────────────────
 
