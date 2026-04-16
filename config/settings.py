@@ -113,7 +113,7 @@ def create_run_dirs(task_id: str) -> dict[str, Path]:
             └── SRT / JSON exports ...
     """
     root  = OUTPUT_DIR / task_id
-    other = root / f"{task_id}-files"   # 英文目录名，避免 Windows FFmpeg 中文路径问题
+    other = root / "附件"   # 附件目录固定命名
     dirs = {
         "root":       root,
         "final":      root,           # mp4/fcpxml 输出到这里，"视频文件"也打开这里
