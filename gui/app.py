@@ -307,6 +307,7 @@ class TaskSidebar(QWidget):
     task_switched = Signal(int)
     task_deleted  = Signal(int)
     task_created  = Signal()
+    task_renamed  = Signal(int, str)   # idx, new_name
 
     WIDTH = 88
 
@@ -407,6 +408,7 @@ class TaskSidebar(QWidget):
         except Exception: pass
         tab.clicked.connect(lambda ii=i: self.task_switched.emit(ii))
         tab.delete_requested.connect(lambda ii=i: self.task_deleted.emit(ii))
+        tab.name_changed.connect(lambda name, ii=i: self.task_renamed.emit(ii, name))
 
 
 # ── Stylesheet ───────────────────────────────────────────────
@@ -1661,6 +1663,7 @@ class MainWindow(QMainWindow):
         if task_idx == self._current_idx:
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
+            self.stop_btn.setText("停止")
             self.files_btn.setEnabled(bool(task.output_dir))
             self._result = {"output_dir": task.output_dir, "mp4": task.mp4_path}
             if result.get("aborted"):
@@ -1675,6 +1678,7 @@ class MainWindow(QMainWindow):
         if task_idx == self._current_idx:
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
+            self.stop_btn.setText("停止")
             self.right_panel.show_error(message)
 
     def showEvent(self, event):
@@ -1820,6 +1824,7 @@ class MainWindow(QMainWindow):
         self.task_sidebar.task_switched.connect(self._switch_task)
         self.task_sidebar.task_deleted.connect(self._delete_task)
         self.task_sidebar.task_created.connect(self._create_task)
+        self.task_sidebar.task_renamed.connect(self._on_task_renamed)
 
         # Dev preview shortcuts — Cmd+1/2/3
         QShortcut(QKeySequence("Ctrl+1"), self).activated.connect(self.right_panel.show_idle)
@@ -1839,6 +1844,9 @@ class MainWindow(QMainWindow):
             return
 
         images = self.left_panel.get_image_paths()
+        # 立即保存到 task，防止切换新任务时被 _create_task(save_current=False) 丢失
+        task.image_paths = list(images)
+        task.sellpoint   = sellpoint
         worker = PipelineWorker(sellpoint, images, task.name, self._video_model, self._kling_mode)
         task.worker = worker
 
@@ -1871,11 +1879,17 @@ class MainWindow(QMainWindow):
         else:
             self._collapse_left_panel()
 
+    def _on_task_renamed(self, task_idx: int, new_name: str):
+        """任务卡重命名 → 同步更新 task.name，确保 worker 用正确名字建输出目录。"""
+        if 0 <= task_idx < len(self._tasks):
+            self._tasks[task_idx].name = new_name
+
     def _on_stop(self):
         task = self._tasks[self._current_idx]
         if task.worker and task.worker.isRunning():
             task.worker.stop()
-            self.right_panel.append_log("正在停止（当前步骤完成后保存进度）…")
+            self.right_panel.append_log("⏸ 收到停止信号，等待当前步骤结束后中断…")
+            self.stop_btn.setText("停止中…")
             self.stop_btn.setEnabled(False)
 
     def _on_open_files(self):
