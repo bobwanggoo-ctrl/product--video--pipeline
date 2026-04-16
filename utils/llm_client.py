@@ -89,20 +89,117 @@ class LLMClient:
     ) -> str:
         """Call multimodal LLM with images.
 
-        Vision 路线：tu-zi（reverse_prompt）主路，AI导航仅在显式指定时使用。
-        原因：AI导航 group=13 仅支持纯文本，multimodal 请求会永久 PENDING。
+        Vision 路线：
+        1. 先用 navigation-ai skill 上传图片 → 拿 CDN URL（token 自动管理）
+        2. 再用 tu-zi 发 Vision 请求（URL 替代 base64，请求体更轻）
+        AI导航 group=13 不支持多模态，仅在显式指定时尝试。
         """
         choice = (preferred_llm or "").strip().lower()
 
-        # 显式指定 AI导航 时才走 AI导航 Vision
         if choice in ("ai_nav", "ainav"):
             return self._call_ai_nav_vision_with_retry(prompt, image_base64_list, max_tokens)
 
-        # 默认 + reverse_prompt 显式：走 tu-zi
+        # 默认路线：skill 上传图片 → tu-zi Vision
         if settings.REVERSE_PROMPT_API_KEY:
+            # 尝试通过 skill 上传图片拿 CDN URL，失败则降级用 base64
+            cdn_urls = self._upload_images_via_skill(image_base64_list)
+            if cdn_urls:
+                return self._call_reverse_prompt_vision_urls(prompt, cdn_urls, max_tokens)
             return self._call_reverse_prompt_vision(prompt, image_base64_list, max_tokens)
 
         raise ValueError("No Vision LLM configured. Set REVERSE_PROMPT_API_KEY in .env")
+
+    def _upload_images_via_skill(self, image_base64_list: list[str]) -> list[str]:
+        """用 navigation-ai skill 上传图片，返回 CDN URL 列表。失败返回空列表。"""
+        import subprocess, tempfile, base64, os
+        from pathlib import Path
+
+        skill_script = Path.home() / ".claude" / "skills" / "navigation-ai" / "scripts" / "main.ts"
+        if not skill_script.exists():
+            return []
+
+        urls = []
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                for i, b64 in enumerate(image_base64_list):
+                    img_path = Path(tmpdir) / f"vision_{i}.jpg"
+                    img_path.write_bytes(base64.b64decode(b64))
+                    r = subprocess.run(
+                        ["npx", "-y", "bun", str(skill_script),
+                         "upload", "--image-file", str(img_path), "--json"],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    if r.returncode == 0:
+                        import json
+                        url = json.loads(r.stdout.strip()).get("url", "")
+                        if url:
+                            urls.append(url)
+        except Exception as e:
+            logger.warning(f"[Vision] skill 上传图片失败，降级 base64: {e}")
+            return []
+
+        return urls if len(urls) == len(image_base64_list) else []
+
+    def _call_reverse_prompt_vision_urls(
+        self,
+        prompt: str,
+        image_urls: list[str],
+        max_tokens: int = 4096,
+    ) -> str:
+        """用 CDN URL（而非 base64）调用 tu-zi Vision，请求体更轻。"""
+        base_url = settings.REVERSE_PROMPT_BASE_URL.rstrip("/")
+        url = f"{base_url}/chat/completions"
+
+        content: list = [{"type": "text", "text": prompt}]
+        for img_url in image_urls:
+            content.append({"type": "image_url", "image_url": {"url": img_url}})
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.REVERSE_PROMPT_API_KEY}",
+        }
+
+        models_to_try = [settings.REVERSE_PROMPT_VISION_MODEL]
+        fallback = getattr(settings, "REVERSE_PROMPT_VISION_MODEL_FALLBACK", "")
+        if fallback and fallback != settings.REVERSE_PROMPT_VISION_MODEL:
+            models_to_try.append(fallback)
+
+        last_exc: Exception | None = None
+        for model_idx, model in enumerate(models_to_try):
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": content}],
+                "max_tokens": max_tokens,
+            }
+            started_at = time.perf_counter()
+            logger.info(f"[Vision][START][TuZi+URL] model={model} images={len(image_urls)}")
+
+            for attempt in range(1, 3):
+                try:
+                    resp = requests.post(url, headers=headers, json=payload, timeout=(10, 120))
+                    resp.raise_for_status()
+                    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                    logger.info(f"[Vision][END][TuZi+URL] model={model} elapsed_ms={elapsed_ms}")
+                    data = resp.json()
+                    text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    if not text:
+                        raise ValueError(f"Vision 返回空结果: {data}")
+                    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text).strip()
+                except requests.exceptions.RequestException as e:
+                    last_exc = e
+                    retryable = isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+                    if retryable and attempt < 2:
+                        logger.warning(f"[Vision][RETRY][TuZi+URL] model={model} attempt={attempt}")
+                        time.sleep(2.0)
+                        continue
+                    if retryable and model_idx < len(models_to_try) - 1:
+                        logger.warning(f"[Vision][FALLBACK][TuZi+URL] {model} 超时，切换 {models_to_try[model_idx + 1]}")
+                    break
+                except Exception as e:
+                    last_exc = e
+                    break
+
+        raise RuntimeError(f"TuZi+URL Vision 所有模型均失败: {last_exc}")
 
     # ── AI导航（含重试）────────────────────────────────
 
