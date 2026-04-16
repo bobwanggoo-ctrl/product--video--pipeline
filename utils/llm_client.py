@@ -22,10 +22,12 @@ _AINAV_RETRY_DELAYS = [3.0, 6.0] # 第2、3次前的等待秒数
 class LLMClient:
     """Unified LLM interface.
 
-    路由（文本 & Vision 均相同）:
-    1. AI导航 Gemini-3-flash (GROUP_ID=13) — 主路，最多重试 3 次
-    2. Reverse Prompt (tu-zi) — 兜底，仅在 AI导航 全部重试耗尽后启用
+    路由：所有路线走 AI导航 group=13。
+    Vision：skill upload → CDN URL（有缓存，同图只传一次）→ skill stream。
     """
+
+    # 进程级 CDN URL 缓存：同一张图在整个 pipeline run 中只上传一次
+    _upload_cache: dict[str, str] = {}
 
     # ── 公开接口 ──────────────────────────────────────
 
@@ -74,34 +76,68 @@ class LLMClient:
 
     def _upload_images_via_skill(self, image_base64_list: list[str]) -> list[str]:
         """用 navigation-ai skill 上传图片，返回 CDN URL 列表。失败返回空列表。"""
-        import subprocess, tempfile, base64, os
+        import subprocess, tempfile, base64, hashlib, json
         from pathlib import Path
+        from concurrent.futures import ThreadPoolExecutor
 
         skill_script = Path.home() / ".claude" / "skills" / "navigation-ai" / "scripts" / "main.ts"
         if not skill_script.exists():
             return []
 
-        urls = []
-        try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                for i, b64 in enumerate(image_base64_list):
-                    img_path = Path(tmpdir) / f"vision_{i}.jpg"
-                    img_path.write_bytes(base64.b64decode(b64))
-                    r = subprocess.run(
-                        ["npx", "-y", "bun", str(skill_script),
-                         "upload", "--image-file", str(img_path), "--json"],
-                        capture_output=True, text=True, timeout=30,
-                    )
-                    if r.returncode == 0:
-                        import json
-                        url = json.loads(r.stdout.strip()).get("url", "")
-                        if url:
-                            urls.append(url)
-        except Exception as e:
-            logger.warning(f"[Vision] skill 上传图片失败，降级 base64: {e}")
+        # 结果槽：先用 None 占位
+        results: list[str | None] = [None] * len(image_base64_list)
+
+        # 快速 cache key：MD5(前 2000 字节 base64)，足够唯一
+        def _cache_key(b64: str) -> str:
+            return hashlib.md5(b64[:2000].encode()).hexdigest()
+
+        # 查缓存 — 已上传过的图直接复用 CDN URL
+        to_upload: list[tuple[int, str, str]] = []  # (index, b64, cache_key)
+        for i, b64 in enumerate(image_base64_list):
+            key = _cache_key(b64)
+            if key in LLMClient._upload_cache:
+                results[i] = LLMClient._upload_cache[key]
+                logger.debug(f"[Vision] upload cache hit idx={i}")
+            else:
+                to_upload.append((i, b64, key))
+
+        if not to_upload:
+            return results  # type: ignore[return-value]
+
+        # 并发上传（临时文件各自独立，避免竞争）
+        def _upload_one(idx: int, b64: str, key: str) -> tuple[int, str]:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp.write(base64.b64decode(b64))
+                tmp_path = tmp.name
+            try:
+                r = subprocess.run(
+                    ["npx", "-y", "bun", str(skill_script),
+                     "upload", "--image-file", tmp_path, "--json"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if r.returncode == 0:
+                    url = json.loads(r.stdout.strip()).get("url", "")
+                    if url:
+                        LLMClient._upload_cache[key] = url
+                        return idx, url
+            except Exception as e:
+                logger.warning(f"[Vision] upload failed idx={idx}: {e}")
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)
+            return idx, ""
+
+        max_w = min(len(to_upload), 4)
+        logger.debug(f"[Vision] uploading {len(to_upload)} images (workers={max_w}, cached={len(image_base64_list)-len(to_upload)})")
+        with ThreadPoolExecutor(max_workers=max_w) as pool:
+            for idx, url in pool.map(lambda t: _upload_one(*t), to_upload):
+                if url:
+                    results[idx] = url
+
+        if any(r is None for r in results):
+            logger.warning("[Vision] 部分图片上传失败")
             return []
 
-        return urls if len(urls) == len(image_base64_list) else []
+        return results  # type: ignore[return-value]
 
     # ── AI导航（含重试）────────────────────────────────
 
