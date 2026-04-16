@@ -60,20 +60,19 @@ class LLMClient:
     ) -> str:
         """Call multimodal LLM with images.
 
-        路线：skill 上传图片 → CDN URL → AI导航 group=13 Vision 请求。
+        路线：skill 上传图片 → CDN URL → skill stream（group=13 Vision）。
+        stream 接口比 tasks 轮询快，且支持带图请求（imageUrls 字段）。
         """
+        if not settings.AI_NAV_TOKEN:
+            raise ValueError("AI_NAV_TOKEN 未配置")
+
         # 1. 上传图片拿 CDN URL
         cdn_urls = self._upload_images_via_skill(image_base64_list)
         if not cdn_urls:
-            raise RuntimeError("Vision 图片上传失败，无法继续")
+            raise RuntimeError("Vision 图片上传失败")
 
-        # 2. AI导航 group=13 Vision（CDN URL 方式）
-        return self._call_ai_nav_vision_with_retry(
-            prompt,
-            image_base64_list,   # 保留 base64 参数签名兼容性
-            max_tokens,
-            image_urls=cdn_urls, # 实际用 CDN URL
-        )
+        # 2. skill stream 带图请求（直接流式输出，无需轮询）
+        return self._call_vision_via_skill_stream(prompt, cdn_urls)
 
     def _upload_images_via_skill(self, image_base64_list: list[str]) -> list[str]:
         """用 navigation-ai skill 上传图片，返回 CDN URL 列表。失败返回空列表。"""
@@ -106,187 +105,41 @@ class LLMClient:
 
         return urls if len(urls) == len(image_base64_list) else []
 
-    def _call_reverse_prompt_vision_urls(
-        self,
-        prompt: str,
-        image_urls: list[str],
-        max_tokens: int = 4096,
-    ) -> str:
-        """用 CDN URL（而非 base64）调用 tu-zi Vision，请求体更轻。"""
-        base_url = settings.REVERSE_PROMPT_BASE_URL.rstrip("/")
-        url = f"{base_url}/chat/completions"
+    def _call_vision_via_skill_stream(self, prompt: str, image_urls: list[str]) -> str:
+        """用 navigation-ai skill stream 命令发带图请求（group=13 Vision），含重试。"""
+        import subprocess
+        from pathlib import Path
 
-        content: list = [{"type": "text", "text": prompt}]
-        for img_url in image_urls:
-            content.append({"type": "image_url", "image_url": {"url": img_url}})
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {settings.REVERSE_PROMPT_API_KEY}",
-        }
-
-        models_to_try = [settings.REVERSE_PROMPT_VISION_MODEL]
-        fallback = getattr(settings, "REVERSE_PROMPT_VISION_MODEL_FALLBACK", "")
-        if fallback and fallback != settings.REVERSE_PROMPT_VISION_MODEL:
-            models_to_try.append(fallback)
-
-        last_exc: Exception | None = None
-        for model_idx, model in enumerate(models_to_try):
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": content}],
-                "max_tokens": max_tokens,
-            }
-            started_at = time.perf_counter()
-            logger.info(f"[Vision][START][TuZi+URL] model={model} images={len(image_urls)}")
-
-            for attempt in range(1, 3):
-                try:
-                    resp = requests.post(url, headers=headers, json=payload, timeout=(10, 120))
-                    resp.raise_for_status()
-                    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-                    logger.info(f"[Vision][END][TuZi+URL] model={model} elapsed_ms={elapsed_ms}")
-                    data = resp.json()
-                    text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                    if not text:
-                        raise ValueError(f"Vision 返回空结果: {data}")
-                    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text).strip()
-                except requests.exceptions.RequestException as e:
-                    last_exc = e
-                    retryable = isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
-                    if retryable and attempt < 2:
-                        logger.warning(f"[Vision][RETRY][TuZi+URL] model={model} attempt={attempt}")
-                        time.sleep(2.0)
-                        continue
-                    if retryable and model_idx < len(models_to_try) - 1:
-                        logger.warning(f"[Vision][FALLBACK][TuZi+URL] {model} 超时，切换 {models_to_try[model_idx + 1]}")
-                    break
-                except Exception as e:
-                    last_exc = e
-                    break
-
-        raise RuntimeError(f"TuZi+URL Vision 所有模型均失败: {last_exc}")
-
-    # ── AI导航（含重试）────────────────────────────────
-
-    def _call_ai_nav_with_retry(
-        self,
-        system_prompt: str,
-        user_message: str,
-        temperature: float,
-        max_tokens: int,
-        json_mode: bool,
-    ) -> str:
-        """AI导航文本调用，失败时指数退避重试最多 _AINAV_MAX_ATTEMPTS 次。"""
-        last_exc: Exception | None = None
-        for attempt in range(1, _AINAV_MAX_ATTEMPTS + 1):
-            try:
-                return self._call_ai_nav(
-                    system_prompt, user_message, temperature, max_tokens, json_mode
-                )
-            except Exception as e:
-                last_exc = e
-                if attempt < _AINAV_MAX_ATTEMPTS:
-                    delay = _AINAV_RETRY_DELAYS[attempt - 1]
-                    logger.warning(
-                        f"[LLM][AiNav] attempt={attempt} 失败，{delay}s 后重试: {e}"
-                    )
-                    time.sleep(delay)
-        raise RuntimeError(
-            f"AI导航文本调用 {_AINAV_MAX_ATTEMPTS} 次全部失败: {last_exc}"
-        ) from last_exc
-
-    def _call_ai_nav_vision_with_retry(
-        self,
-        prompt: str,
-        image_base64_list: list[str],
-        max_tokens: int,
-        image_urls: list[str] | None = None,
-    ) -> str:
-        """AI导航 Vision 调用，失败时指数退避重试最多 _AINAV_MAX_ATTEMPTS 次。"""
-        last_exc: Exception | None = None
-        for attempt in range(1, _AINAV_MAX_ATTEMPTS + 1):
-            try:
-                return self._call_ai_nav_vision(prompt, image_base64_list, max_tokens, image_urls=image_urls)
-            except Exception as e:
-                last_exc = e
-                if attempt < _AINAV_MAX_ATTEMPTS:
-                    delay = _AINAV_RETRY_DELAYS[attempt - 1]
-                    logger.warning(
-                        f"[Vision][AiNav] attempt={attempt} 失败，{delay}s 后重试: {e}"
-                    )
-                    time.sleep(delay)
-        raise RuntimeError(
-            f"AI导航 Vision 调用 {_AINAV_MAX_ATTEMPTS} 次全部失败: {last_exc}"
-        ) from last_exc
-
-    def _call_ai_nav(
-        self,
-        system_prompt: str,
-        user_message: str,
-        temperature: float,
-        max_tokens: int,
-        json_mode: bool,
-    ) -> str:
-        """单次 AI导航文本调用（params.messages 格式 + 异步轮询）。"""
-        from utils.ai_nav_client import AiNavClient
-
-        client = AiNavClient(purpose="llm")
-        started_at = time.perf_counter()
-        logger.info("[LLM][START][AiNav] group=13 params.messages")
-
-        task_id = client.create_llm_task(
-            system_prompt=system_prompt,
-            user_message=user_message,
-        )
-        result = client.wait_for_task(task_id, timeout=240.0)
-
-        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-        logger.info(f"[LLM][END][AiNav] elapsed_ms={elapsed_ms}")
-
-        text = result.get("result_text", "")
-        if not text:
-            raise ValueError(f"AI导航返回空结果: {result}")
-
-        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text).strip()
-
-    def _call_ai_nav_vision(
-        self,
-        prompt: str,
-        image_base64_list: list[str],
-        max_tokens: int,
-        image_urls: list[str] | None = None,
-    ) -> str:
-        """单次 AI导航 Vision 调用。
-
-        image_urls 优先（CDN URL，请求体轻）；未传时降级用 base64。
-        """
-        from utils.ai_nav_client import AiNavClient
-
-        client = AiNavClient(purpose="llm")
-        started_at = time.perf_counter()
-
-        # 优先用 CDN URL，否则用 base64
-        urls = image_urls or [
-            f"data:image/jpeg;base64,{img}" for img in image_base64_list
+        skill_script = Path.home() / ".claude" / "skills" / "navigation-ai" / "scripts" / "main.ts"
+        cmd = [
+            "npx", "-y", "bun", str(skill_script),
+            "stream", "--group-id", "13",
+            "--user", prompt,
         ]
-        logger.info(f"[Vision][START][AiNav] images={len(urls)} url_mode={bool(image_urls)}")
+        for url in image_urls:
+            cmd += ["--image-url-add", url]
 
-        task_id = client.create_llm_task(
-            system_prompt="",
-            user_message=prompt,
-            image_urls=urls,
-        )
-        result = client.wait_for_task(task_id, timeout=240.0)
+        for attempt in range(1, 4):
+            started_at = time.perf_counter()
+            logger.info(f"[Vision][START][Skill+Stream] images={len(image_urls)} attempt={attempt}")
 
-        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-        logger.info(f"[Vision][END][AiNav] elapsed_ms={elapsed_ms}")
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
 
-        text = result.get("result_text", "")
-        if not text:
-            raise ValueError(f"AI导航 Vision 返回空结果: {result}")
+            if r.returncode == 0:
+                text = "\n".join(
+                    line for line in r.stdout.splitlines()
+                    if not line.startswith("[navigation-ai]")
+                ).strip()
+                if text:
+                    logger.info(f"[Vision][END][Skill+Stream] elapsed_ms={elapsed_ms}")
+                    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text).strip()
 
-        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text).strip()
+            logger.warning(f"[Vision][Skill+Stream] attempt={attempt} 失败: {r.stderr[:200]}")
+            if attempt < 3:
+                time.sleep(2.0)
+
+        raise RuntimeError("skill stream Vision 3 次均失败")
 
     # ── Reverse Prompt / tu-zi（兜底）──────────────────
 
