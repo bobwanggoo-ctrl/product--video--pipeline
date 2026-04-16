@@ -3,10 +3,12 @@
 读取 Storyboard 中每个 shot 的 prompt_cn，
 配合用户上传的产品参考图，调用 AI导航生图 API 生成画面帧。
 
-策略：先批量提交所有任务，再逐个轮询等待结果。
+策略：先批量提交所有任务，再并发轮询等待结果（ThreadPoolExecutor）。
 """
 
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
@@ -21,6 +23,9 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 # 参考图上限（AI导航最多支持 15 张，产品一般 ≤6 张）
 MAX_REFERENCE_IMAGES = 6
+
+# 并发轮询数（可通过环境变量调整）
+_MAX_CONCURRENT_POLLS = int(os.getenv("AI_NAV_IMAGE_CONCURRENT", "8"))
 
 
 def generate_frames(
@@ -98,33 +103,46 @@ def generate_frames(
 
     logger.info(f"[Skill2] 提交完成: {len(task_map)} 成功, {len(submit_failed)} 失败")
 
-    # 4. 批量轮询 wait_for_task + 下载
+    # 4. 并发轮询 wait_for_task + 下载
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
     frame_paths: dict[int, str] = {}
     poll_failed: list[int] = []
 
-    for i, (task_id, shot_id) in enumerate(task_map.items()):
-        logger.info(f"[Skill2] 等待 [{i+1}/{len(task_map)}] shot_{shot_id:02d} ...")
-        try:
-            result = client.wait_for_task(
-                task_id, poll_interval=poll_interval, timeout=timeout,
-            )
-            urls = result.get("result_urls", [])
-            if not urls:
-                logger.warning(f"  shot_{shot_id:02d} 无图片 URL 返回")
-                poll_failed.append(shot_id)
-                continue
+    def _poll_and_download(task_id: str, shot_id: int) -> tuple[int, str]:
+        """单个任务：轮询等待 + 下载图片。线程安全。"""
+        result = client.wait_for_task(
+            task_id, poll_interval=poll_interval, timeout=timeout,
+        )
+        urls = result.get("result_urls", [])
+        if not urls:
+            raise ValueError(f"shot_{shot_id:02d} 无图片 URL 返回")
+        save_path = out_path / f"shot_{shot_id:02d}.png"
+        _download_image(urls[0], str(save_path))
+        return shot_id, str(save_path)
 
-            save_path = out_path / f"shot_{shot_id:02d}.png"
-            _download_image(urls[0], str(save_path))
-            frame_paths[shot_id] = str(save_path)
-            logger.info(f"  shot_{shot_id:02d} ✓ → {save_path.name}")
+    workers = min(_MAX_CONCURRENT_POLLS, len(task_map))
+    logger.info(f"[Skill2] 并发等待 {len(task_map)} 个任务 (max_workers={workers})")
 
-        except Exception as e:
-            logger.warning(f"  shot_{shot_id:02d} 失败: {e}")
-            poll_failed.append(shot_id)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_sid = {
+            executor.submit(_poll_and_download, tid, sid): sid
+            for tid, sid in task_map.items()
+        }
+        done_count = 0
+        for future in as_completed(future_to_sid):
+            sid = future_to_sid[future]
+            done_count += 1
+            try:
+                result_sid, path = future.result()
+                frame_paths[result_sid] = path
+                logger.info(
+                    f"  [{done_count}/{len(task_map)}] shot_{result_sid:02d} ✓ → {Path(path).name}"
+                )
+            except Exception as e:
+                logger.warning(f"  [{done_count}/{len(task_map)}] shot_{sid:02d} 失败: {e}")
+                poll_failed.append(sid)
 
     failed_shots = submit_failed + poll_failed
     logger.info(
