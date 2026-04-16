@@ -12,6 +12,7 @@ from typing import Optional
 import requests
 
 from config import settings
+from utils.json_repair import normalize_llm_text
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +259,7 @@ class AiNavClient:
         # 格式 1: LLM 返回 — responseJson.data 是字符串
         raw_data = response_json.get("data")
         if isinstance(raw_data, str) and raw_data:
-            result_text = raw_data
+            result_text = normalize_llm_text(raw_data)
 
         # 格式 2: LLM 返回 — OpenAI choices 格式（兼容旧路由）
         if not result_text:

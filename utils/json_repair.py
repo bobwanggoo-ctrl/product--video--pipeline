@@ -7,6 +7,28 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# Unicode 空白字符规范化
+# NBSP(\u00a0)、各种宽度空格替换为普通空格；零宽字符直接删除
+_NBSP_RE    = re.compile(r'[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]')
+_ZWSP_RE    = re.compile(r'[\u200b-\u200d\u2028\u2029\ufeff]')
+_CTRL_RE    = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+
+
+def normalize_llm_text(text: str) -> str:
+    """清理 LLM 返回文本中的非标准空白和控制字符。
+
+    - NBSP 等 Unicode 空白 → 普通空格
+    - 零宽字符 / BOM → 删除
+    - ASCII 控制字符（换行 \\n \\r \\t 保留）→ 删除
+    """
+    if not text:
+        return text
+    text = _NBSP_RE.sub(' ', text)     # NBSP → 普通空格
+    text = _ZWSP_RE.sub('', text)      # 零宽字符删除
+    text = _CTRL_RE.sub('', text)      # ASCII 控制字符删除
+    return text
+
+
 def repair_json(s: str) -> str:
     """Repair truncated or malformed JSON: remove trailing commas, balance brackets."""
     # Remove trailing commas before } or ]
@@ -63,6 +85,9 @@ def extract_json(text: str) -> dict:
     """Extract JSON from LLM output, handling markdown code blocks and truncation."""
     if not text or not isinstance(text, str):
         raise ValueError("Empty content, cannot extract JSON.")
+
+    # Step 0: 规范化 Unicode 空白（NBSP 等），避免 JSON parse 因非标准字符失败
+    text = normalize_llm_text(text)
 
     # Try markdown code block
     code_block = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL | re.IGNORECASE)

@@ -1,8 +1,4 @@
-"""Unified LLM client.
-
-路由优先级（文本 & Vision 均一致）:
-  AI导航 (GROUP_ID=13) → 最多重试 3 次 → Reverse Prompt (tu-zi) 兜底
-"""
+"""Unified LLM client — 所有路线走 AI导航 group=13。"""
 
 import json
 import re
@@ -13,6 +9,8 @@ from typing import Optional
 import requests
 
 from config import settings
+
+from utils.json_repair import normalize_llm_text
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +131,7 @@ class LLMClient:
                 ).strip()
                 if text:
                     logger.info(f"[Vision][END][Skill+Stream] elapsed_ms={elapsed_ms}")
-                    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text).strip()
+                    return normalize_llm_text(text)
 
             logger.warning(f"[Vision][Skill+Stream] attempt={attempt} 失败: {r.stderr[:200]}")
             if attempt < 3:
@@ -208,7 +206,7 @@ class LLMClient:
         content = (choices[0].get("message") or {}).get("content", "").strip()
         if not content:
             raise ValueError(f"Empty TuZi response: {data}")
-        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', content)
+        return normalize_llm_text(content)
 
     def _call_reverse_prompt_vision(
         self,
@@ -261,7 +259,7 @@ class LLMClient:
                     text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                     if not text:
                         raise ValueError(f"Vision 返回空结果: {data}")
-                    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text).strip()
+                    return normalize_llm_text(text)
                 except requests.exceptions.RequestException as e:
                     last_exc = e
                     retryable = isinstance(
