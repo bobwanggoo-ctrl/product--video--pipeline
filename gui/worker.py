@@ -134,7 +134,7 @@ _LOG_RULES = [
      lambda m: f"⚠️ 合规检查请求失败，正在重试（第 {m.group(1)} 次）"),
     # LLM 全部失败
     (_re.compile(r"\[Converter\] LLM call failed"),
-     lambda m: "❌ 分镜生成失败，请检查网络后重试"),
+     lambda m: "❌ 分镜生成失败，请稍后重试"),
     # 分镜校验失败重试
     (_re.compile(r"\[Converter\] 硬约束校验失败 \(attempt (\d+)\)"),
      lambda m: f"⚠️ 分镜校验失败，正在重试（第 {m.group(1)} 次）"),
