@@ -561,7 +561,9 @@ class PipelineOrchestrator:
                     self.state.steps["compliance_check"].status         = StepStatus.COMPLETED
 
                     if on_progress:
+                        on_progress(step.value, "started", "")
                         on_progress(step.value, "completed", "")
+                        on_progress("compliance_check", "started", "")
                         on_progress("compliance_check", "completed", "")
 
                     self._save_compliance_report(run_dirs, initial_input)
