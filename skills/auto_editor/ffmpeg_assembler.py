@@ -20,10 +20,55 @@ logger = logging.getLogger(__name__)
 MIN_DISPLAY_DURATION = 1.5
 VALID_SPEED_FACTORS = [1.0, 1.25, 1.5, 1.75, 2.0]
 
-# 字幕字体路径（macOS 系统默认，可通过环境变量 SUBTITLE_FONT 覆盖）
+# 字幕字体查找顺序：env SUBTITLE_FONT > 项目内置思源黑体 > 系统字体
 import os
-DEFAULT_FONT_PATH = "/Library/Fonts/Arial Unicode.ttf"
-SUBTITLE_FONT = os.environ.get("SUBTITLE_FONT", DEFAULT_FONT_PATH)
+import platform
+
+_BUNDLED_FONT = (
+    Path(__file__).resolve().parent.parent.parent
+    / "assets/fonts/source-han-sans/SourceHanSansCN-Regular.otf"
+)
+
+_SYSTEM_FONT_CANDIDATES = {
+    "Darwin": [
+        "/Library/Fonts/Arial Unicode.ttf",
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ],
+    "Windows": [
+        "C:/Windows/Fonts/msyh.ttc",       # 微软雅黑
+        "C:/Windows/Fonts/msyhbd.ttc",
+        "C:/Windows/Fonts/simhei.ttf",     # 黑体
+        "C:/Windows/Fonts/arial.ttf",
+    ],
+    "Linux": [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ],
+}
+
+
+def _resolve_subtitle_font() -> str | None:
+    """查找可用的字幕字体文件。找不到返回 None，调用方应跳过字幕烧录。"""
+    env_font = os.environ.get("SUBTITLE_FONT")
+    if env_font and Path(env_font).is_file():
+        return env_font
+    if _BUNDLED_FONT.is_file():
+        return str(_BUNDLED_FONT)
+    for candidate in _SYSTEM_FONT_CANDIDATES.get(platform.system(), []):
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
+def _escape_fontfile_for_drawtext(font_path: str) -> str:
+    """转义字体路径给 ffmpeg drawtext 使用。
+    Windows 反斜杠先转正斜杠，再转义冒号和空格。
+    """
+    path = font_path.replace("\\", "/")
+    return path.replace(":", "\\:").replace(" ", "\\ ")
 
 
 def assemble(
@@ -205,6 +250,17 @@ def _burn_subtitles(video_path: str, srt_path: str, output_path: str, *, timelin
         run_ffmpeg(["-i", video_path, "-c", "copy", output_path])
         return
 
+    font_path = _resolve_subtitle_font()
+    if not font_path:
+        logger.warning(
+            "[Subtitle] 找不到可用字体文件（项目内置思源黑体 + 系统字体都未命中），"
+            "跳过字幕烧录。输出视频不含字幕，SRT 文件仍会保留。"
+        )
+        run_ffmpeg(["-i", video_path, "-c", "copy", output_path])
+        return
+    logger.info(f"[Subtitle] 使用字体: {font_path}")
+    fontfile_escaped = _escape_fontfile_for_drawtext(font_path)
+
     # 构建 clip 字幕元数据查找表（按字幕序号顺序）
     clip_subtitle_info = []
     if timeline:
@@ -235,7 +291,6 @@ def _burn_subtitles(video_path: str, srt_path: str, output_path: str, *, timelin
                 )
         start = entry["start"]
         end = entry["end"]
-        fontfile_escaped = SUBTITLE_FONT.replace(":", "\\:").replace(" ", "\\ ")
 
         # 根据 subtitle_style 和 subtitle_position 决定字号和位置
         info = clip_subtitle_info[i] if i < len(clip_subtitle_info) else {}
