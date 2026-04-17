@@ -27,12 +27,15 @@ class PipelineWorker(QThread):
     pipeline_done  = Signal(dict)   # renamed: avoids shadowing QThread.finished
     error          = Signal(str)
 
-    def __init__(self, sellpoint_text: str, image_paths: list[str], task_name: str = "", video_model: str = "kling", kling_mode: str = "std"):
+    def __init__(self, sellpoint_text: str, image_paths: list[str], task_name: str = "",
+                 video_model: str = "kling", kling_mode: str = "std",
+                 resume_from_checkpoint: str = ""):
         super().__init__()
         self.sellpoint_text = sellpoint_text
         self.image_paths = image_paths
         self.video_model = video_model
         self.kling_mode  = kling_mode
+        self.resume_from_checkpoint = resume_from_checkpoint
         # Sanitize task_name for filesystem; fall back to timestamp
         safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', task_name).strip('. ')
         self.task_name = safe if safe else f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -91,6 +94,16 @@ class PipelineWorker(QThread):
         state = PipelineOrchestrator.__new__(PipelineOrchestrator)  # avoid double import
         from pipeline.orchestrator import PipelineOrchestrator, PipelineState
         state = PipelineState(task_id=task_id, mode="full_auto")
+
+        # Resume from checkpoint if provided
+        if self.resume_from_checkpoint:
+            cp = Path(self.resume_from_checkpoint)
+            if cp.exists():
+                state = PipelineState.load(cp)
+                self.log.emit(f"⏩ 从断点恢复: {cp.name}")
+            else:
+                self.log.emit(f"⚠️ checkpoint 不存在，从头开始")
+
         orchestrator = PipelineOrchestrator(state)
 
         result = orchestrator.run_all(

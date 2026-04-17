@@ -82,6 +82,7 @@ class TaskState:
     log_lines: list = field(default_factory=list)
     mp4_path: str = ""
     output_dir: str = ""
+    checkpoint_path: str = ""     # 断点路径，停止/报错后保存，用于恢复
     worker: object = None         # PipelineWorker | None
 
 
@@ -1492,10 +1493,7 @@ class MainWindow(QMainWindow):
         self.task_sidebar.set_current(new_idx)
 
         # Button states
-        running = task.worker is not None and task.worker.isRunning()
-        self.start_btn.setEnabled(not running)
-        self.stop_btn.setEnabled(running)
-        self.files_btn.setEnabled(bool(task.output_dir))
+        self._update_buttons(task)
         self._result = {"output_dir": task.output_dir, "mp4": task.mp4_path}
 
         # Show/hide input panel based on task state
@@ -1656,29 +1654,40 @@ class MainWindow(QMainWindow):
         task.output_dir = result.get("output_dir", task.output_dir)
         if result.get("aborted"):
             task.panel_state = 1
+            # 保存 checkpoint 路径，供下次"继续"使用
+            if task.output_dir:
+                cp = Path(task.output_dir).parent / "附件" / "checkpoint.json"
+                if not cp.exists():
+                    cp = Path(task.output_dir) / "附件" / "checkpoint.json"
+                if cp.exists():
+                    task.checkpoint_path = str(cp)
         else:
             task.panel_state = 2
+            task.checkpoint_path = ""   # 完成后清掉，不再提示恢复
             self.task_sidebar.set_progress(task_idx, 1.0)   # 100%
 
         if task_idx == self._current_idx:
-            self.start_btn.setEnabled(True)
-            self.stop_btn.setEnabled(False)
-            self.stop_btn.setText("停止")
-            self.files_btn.setEnabled(bool(task.output_dir))
+            self._update_buttons(task)
             self._result = {"output_dir": task.output_dir, "mp4": task.mp4_path}
             if result.get("aborted"):
-                self.right_panel.append_log("已停止，进度已保存，下次可继续")
+                self.right_panel.append_log("⏸ 已停止，进度已保存，点击「继续」可恢复")
             else:
                 self.right_panel.show_done(task.mp4_path)
 
     def _on_task_error(self, task_idx: int, message: str):
         if not (0 <= task_idx < len(self._tasks)):
             return
+        task = self._tasks[task_idx]
+        # 报错时也尝试保存 checkpoint 路径（orchestrator 在报错前可能已保存了部分进度）
+        if task.output_dir:
+            cp = Path(task.output_dir).parent / "附件" / "checkpoint.json"
+            if not cp.exists():
+                cp = Path(task.output_dir) / "附件" / "checkpoint.json"
+            if cp.exists():
+                task.checkpoint_path = str(cp)
         # task.worker cleared by QThread.finished → avoids GC while thread runs
         if task_idx == self._current_idx:
-            self.start_btn.setEnabled(True)
-            self.stop_btn.setEnabled(False)
-            self.stop_btn.setText("停止")
+            self._update_buttons(task)
             self.right_panel.show_error(message)
 
     def showEvent(self, event):
@@ -1847,7 +1856,26 @@ class MainWindow(QMainWindow):
         # 立即保存到 task，防止切换新任务时被 _create_task(save_current=False) 丢失
         task.image_paths = list(images)
         task.sellpoint   = sellpoint
-        worker = PipelineWorker(sellpoint, images, task.name, self._video_model, self._kling_mode)
+
+        # 有断点时询问用户是否继续
+        resume_cp = ""
+        if task.checkpoint_path and Path(task.checkpoint_path).exists():
+            from PySide6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self, "继续上次任务",
+                "检测到上次未完成的进度，是否从断点继续？\n\n"
+                "• 是 — 跳过已完成步骤，继续未完成部分\n"
+                "• 否 — 清除进度，从头重新生成",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if reply == QMessageBox.Yes:
+                resume_cp = task.checkpoint_path
+            else:
+                task.checkpoint_path = ""
+
+        worker = PipelineWorker(sellpoint, images, task.name, self._video_model, self._kling_mode,
+                                resume_from_checkpoint=resume_cp)
         task.worker = worker
 
         # Route all signals through task index
@@ -1863,9 +1891,10 @@ class MainWindow(QMainWindow):
             lambda msg, i=task_idx: self._on_task_error(i, msg))
         # QThread.finished fires AFTER run() returns — safe point to release Python ref
         worker.finished.connect(
-            lambda t=task: setattr(t, 'worker', None))
+            lambda t=task, i=task_idx: self._on_worker_thread_done(t, i))
 
         self.start_btn.setEnabled(False)
+        self.start_btn.setText("开始")
         self.stop_btn.setEnabled(True)
         self.files_btn.setEnabled(False)
         task.panel_state = 1
@@ -1878,6 +1907,32 @@ class MainWindow(QMainWindow):
             self._fold_then_new_task()
         else:
             self._collapse_left_panel()
+
+    def _on_worker_thread_done(self, task: "TaskState", task_idx: int):
+        """QThread.finished 回调：清 worker 引用，刷新按钮。"""
+        task.worker = None
+        if task_idx == self._current_idx:
+            self._update_buttons(task)
+
+    def _update_buttons(self, task: "TaskState"):
+        """根据 task 当前状态统一刷新底部按钮。"""
+        running = task.worker is not None and task.worker.isRunning()
+        has_cp  = bool(task.checkpoint_path and Path(task.checkpoint_path).exists())
+
+        self.stop_btn.setEnabled(running)
+        self.stop_btn.setText("停止")
+        self.files_btn.setEnabled(bool(task.output_dir))
+
+        if running:
+            self.start_btn.setEnabled(False)
+            self.start_btn.setText("开始")
+        elif has_cp:
+            # 有断点：按钮变"继续"，提示用户可恢复
+            self.start_btn.setEnabled(True)
+            self.start_btn.setText("继续")
+        else:
+            self.start_btn.setEnabled(True)
+            self.start_btn.setText("开始")
 
     def _on_task_renamed(self, task_idx: int, new_name: str):
         """任务卡重命名 → 同步更新 task.name，确保 worker 用正确名字建输出目录。"""
