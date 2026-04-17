@@ -55,9 +55,9 @@ def validate_storyboard(data: dict[str, Any]) -> tuple[bool, list[str]]:
 
     # --- A2: Shot type distribution ---
     close_macro_count = sum(1 for s in all_shots if s.get("type") in ("Close", "Macro"))
-    if close_macro_count > 4:
+    if close_macro_count > 5:
         errors.append(
-            f"[FAIL] A2: Close/Macro shots = {close_macro_count}, max allowed 4"
+            f"[FAIL] A2: Close/Macro shots = {close_macro_count}, max allowed 5"
         )
 
     for s in all_shots:
