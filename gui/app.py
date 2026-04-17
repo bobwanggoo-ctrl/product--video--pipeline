@@ -1857,22 +1857,10 @@ class MainWindow(QMainWindow):
         task.image_paths = list(images)
         task.sellpoint   = sellpoint
 
-        # 有断点时询问用户是否继续
+        # 有断点时直接从断点恢复
         resume_cp = ""
         if task.checkpoint_path and Path(task.checkpoint_path).exists():
-            from PySide6.QtWidgets import QMessageBox
-            reply = QMessageBox.question(
-                self, "继续上次任务",
-                "检测到上次未完成的进度，是否从断点继续？\n\n"
-                "• 是 — 跳过已完成步骤，继续未完成部分\n"
-                "• 否 — 清除进度，从头重新生成",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if reply == QMessageBox.Yes:
-                resume_cp = task.checkpoint_path
-            else:
-                task.checkpoint_path = ""
+            resume_cp = task.checkpoint_path
 
         worker = PipelineWorker(sellpoint, images, task.name, self._video_model, self._kling_mode,
                                 resume_from_checkpoint=resume_cp)
