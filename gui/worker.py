@@ -119,13 +119,71 @@ class PipelineWorker(QThread):
 
 # ── Logging bridge ──────────────────────────────────────────
 
+# 用户友好日志规则：(正则, 替换模板)
+# 替换模板中 \1 \2 等对应正则捕获组
+import re as _re
+
+_LOG_RULES = [
+    # LLM 重试
+    (_re.compile(r"\[LLM\].*attempt=(\d+) 失败.*超时.*\((\d+)\.0s\)"),
+     lambda m: f"⚠️ AI 任务超时，正在重试（第 {m.group(1)} 次）"),
+    (_re.compile(r"\[LLM\].*attempt=(\d+) 失败"),
+     lambda m: f"⚠️ AI 请求失败，正在重试（第 {m.group(1)} 次）"),
+    # Vision 重试
+    (_re.compile(r"\[Vision\].*attempt=(\d+) 失败"),
+     lambda m: f"⚠️ 合规检查请求失败，正在重试（第 {m.group(1)} 次）"),
+    # LLM 全部失败
+    (_re.compile(r"\[Converter\] LLM call failed"),
+     lambda m: "❌ 分镜生成失败，请检查网络后重试"),
+    # 分镜校验失败重试
+    (_re.compile(r"\[Converter\] 硬约束校验失败 \(attempt (\d+)\)"),
+     lambda m: f"⚠️ 分镜校验失败，正在重试（第 {m.group(1)} 次）"),
+    # Kling 视频失败
+    (_re.compile(r"shot_(\d+) Kling 失败"),
+     lambda m: f"⚠️ 视频片段 {int(m.group(1))} 超时，跳过"),
+    # 帧图生成失败
+    (_re.compile(r"shot_(\d+) 失败"),
+     lambda m: f"⚠️ 帧图 {int(m.group(1))} 生成失败"),
+    # 帧图提交失败
+    (_re.compile(r"shot_(\d+) 提交失败"),
+     lambda m: f"⚠️ 帧图 {int(m.group(1))} 提交失败"),
+    # 景别不足
+    (_re.compile(r"景别 (\S+) 只有 (\d+) 个，低于最低要求 (\d+)"),
+     lambda m: f"⚠️ {m.group(1)} 景别视频不足（{m.group(2)}/{m.group(3)}），继续处理"),
+]
+
+
 class _SignalLogHandler(logging.Handler):
+    """把 WARNING/ERROR 日志转成用户友好提示发给 GUI；同时把原始信息打到 stderr。"""
+
     def __init__(self, signal):
         super().__init__()
         self._signal = signal
 
     def emit(self, record):
         try:
-            self._signal.emit(self.format(record))
+            raw = record.getMessage()
+
+            # 始终把 WARNING/ERROR 原始信息打到终端（调试用）
+            if record.levelno >= logging.WARNING:
+                import sys
+                print(f"[{record.levelname}] {record.name}: {raw}", file=sys.stderr)
+
+            # 只把 WARNING/ERROR 发给 GUI，且转成友好文案
+            if record.levelno >= logging.WARNING:
+                friendly = self._to_friendly(raw)
+                if friendly:
+                    self._signal.emit(friendly)
         except Exception:
             pass
+
+    @staticmethod
+    def _to_friendly(msg: str) -> str:
+        for pattern, formatter in _LOG_RULES:
+            m = pattern.search(msg)
+            if m:
+                return formatter(m)
+        # 没有匹配规则的 WARNING/ERROR：截断到 60 字，去掉技术前缀
+        # 去掉 [Xxx] 前缀
+        cleaned = _re.sub(r"^\[[\w/\[\]]+\]\s*", "", msg).strip()
+        return f"⚠️ {cleaned[:80]}" if cleaned else ""
