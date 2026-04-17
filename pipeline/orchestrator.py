@@ -654,6 +654,8 @@ class PipelineOrchestrator:
                 "frame_paths": out("storyboard_to_frame").get("frame_paths", {}),
                 "storyboard": out("sellpoint_to_storyboard").get("storyboard"),
                 "video_output_dir": str(dirs["videos"]),
+                "video_model": ini.get("video_model", "kling"),
+                "kling_mode":  ini.get("kling_mode", "std"),
             }
 
         if step == PipelineStep.AUTO_EDIT:
