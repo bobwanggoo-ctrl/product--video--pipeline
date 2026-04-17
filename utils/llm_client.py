@@ -80,7 +80,10 @@ class LLMClient:
         from pathlib import Path
         from concurrent.futures import ThreadPoolExecutor
 
-        skill_script = Path.home() / ".claude" / "skills" / "navigation-ai" / "scripts" / "main.ts"
+        skill_script = Path(__file__).resolve().parent.parent / "tools" / "navigation-ai" / "main.ts"
+        if not skill_script.exists():
+            # 兼容旧路径
+            skill_script = Path.home() / ".claude" / "skills" / "navigation-ai" / "scripts" / "main.ts"
         if not skill_script.exists():
             return []
 
@@ -255,7 +258,9 @@ class LLMClient:
         import subprocess
         from pathlib import Path
 
-        skill_script = Path.home() / ".claude" / "skills" / "navigation-ai" / "scripts" / "main.ts"
+        skill_script = Path(__file__).resolve().parent.parent / "tools" / "navigation-ai" / "main.ts"
+        if not skill_script.exists():
+            skill_script = Path.home() / ".claude" / "skills" / "navigation-ai" / "scripts" / "main.ts"
         cmd = [
             "npx", "-y", "bun", str(skill_script),
             "stream", "--group-id", "13",
