@@ -323,28 +323,57 @@ RECOMMENDED_FONTS: dict[str, dict] = {
         "tags": ["brush", "dynamic", "chinese", "bold"],
         "description": "疾风书法体，刚劲有力，适合运动/电竞/潮牌产品中文标题",
     },
+
+    # ── 项目内置兜底字体（assets/fonts/ 提供，同事 clone 即可用）──
+    "SourceHanSansCN-Regular.otf": {
+        "name": "思源黑体 CN Regular",
+        "family": "Source Han Sans CN",
+        "style": "Regular",
+        "category": "cjk-sans",
+        "has_cjk": True,
+        "tags": ["modern", "clean", "chinese", "opensource", "fallback"],
+        "description": "思源黑体常规体（开源免费可商用），项目内置兜底中文字体，适合通用中文字幕",
+    },
+    "SourceHanSansCN-Bold.otf": {
+        "name": "思源黑体 CN Bold",
+        "family": "Source Han Sans CN",
+        "style": "Bold",
+        "category": "cjk-sans",
+        "has_cjk": True,
+        "tags": ["modern", "bold", "chinese", "opensource", "fallback"],
+        "description": "思源黑体粗体（开源免费可商用），项目内置兜底中文字体，适合中文标题",
+    },
 }
 
 
-def scan_font_library(font_dir: str) -> list[FontInfo]:
+def scan_font_library(font_dir: str | list[str]) -> list[FontInfo]:
     """扫描字体目录，返回推荐字体列表。
 
     只返回推荐表中存在且目录中实际有文件的字体。
     推荐表之外的字体不返回——避免给 LLM 过多无用选项。
 
     Args:
-        font_dir: 字体目录路径（如 input/fonts/）。
+        font_dir: 字体目录路径（如 input/fonts/）。可传单个或多个路径；
+                  多个路径时按顺序扫描，同名文件以先扫到的为准。
+                  项目约定同时扫描 input/fonts/ 和 assets/fonts/source-han-sans/，
+                  后者是随仓库分发的兜底字体。
 
     Returns:
         list[FontInfo]，按分类排序。
     """
-    root = Path(font_dir)
-    if not root.exists():
-        logger.warning(f"字体目录不存在: {font_dir}")
-        return []
+    if isinstance(font_dir, str):
+        dirs = [Path(font_dir)]
+    else:
+        dirs = [Path(d) for d in font_dir]
 
-    # 扫描目录中的所有字体文件
-    existing_files = {f.name for f in root.iterdir() if f.suffix.lower() in _FONT_EXTENSIONS}
+    existing_files: dict[str, Path] = {}
+    for root in dirs:
+        if not root.exists():
+            logger.warning(f"字体目录不存在: {root}")
+            continue
+        for f in root.iterdir():
+            if f.suffix.lower() in _FONT_EXTENSIONS and f.name not in existing_files:
+                existing_files[f.name] = f
 
     results: list[FontInfo] = []
     matched = 0
@@ -354,7 +383,7 @@ def scan_font_library(font_dir: str) -> list[FontInfo]:
             continue
 
         matched += 1
-        font_path = str(root / filename)
+        font_path = str(existing_files[filename])
         results.append(FontInfo(
             name=meta["name"],
             family=meta.get("family", meta["name"]),

@@ -76,7 +76,11 @@ def run(
 
     logger.info("Skill 5 Step 2/4: BGM + 字体扫描")
     bgm_list = scan_bgm_library(bgm_dir) if bgm_dir else []
-    font_list = scan_font_library(font_dir) if font_dir else []
+    # 字体扫描同时包含用户目录（input/fonts/）和项目兜底目录（assets/fonts/source-han-sans/）
+    # 后者是随仓库分发的思源黑体，同事 clone 即可使用，不依赖本机已装字体
+    from config.settings import ASSETS_DIR
+    font_dirs = [d for d in (font_dir, str(ASSETS_DIR / "fonts" / "source-han-sans")) if d]
+    font_list = scan_font_library(font_dirs) if font_dirs else []
     logger.info(f"  BGM 候选: {len(bgm_list)} 首, 字体候选: {len(font_list)} 个")
 
     logger.info("Skill 5 Step 3/4: LLM 剪辑决策")

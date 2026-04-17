@@ -6,3 +6,5 @@ output/
 *.log
 .DS_Store
 input/
+.setup_done
+.pytest_cache/
