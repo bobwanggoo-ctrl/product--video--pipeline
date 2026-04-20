@@ -76,6 +76,7 @@ class PipelineWorker(QThread):
 
         run_dirs = create_run_dirs(task_id)
         run_dirs["sellpoint"].write_text(self.sellpoint_text, encoding="utf-8")
+        (run_dirs["other"] / "name.txt").write_text(task_id, encoding="utf-8")
 
         # Emit output path immediately so Files button works during run
         self.run_dirs_ready.emit(str(run_dirs["root"]))

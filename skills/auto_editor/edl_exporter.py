@@ -148,6 +148,9 @@ def _finalize_draft(draft_path: Path) -> None:
     content = json.loads(content_file.read_text(encoding="utf-8"))
 
     # ── 1. 复制媒体到 Resources/ 并更新路径 ──
+    # path 字段使用「相对于草稿目录的 POSIX 相对路径」，保证 Mac/Windows 剪映
+    # 在用户把草稿拷贝到各自 Projects 目录后都能正确链接素材。
+    # （绝对路径跨机器/跨平台会失效 —— 这是 Windows 用户素材断链的根因。）
     resources_dir = draft_path / "Resources"
     resources_dir.mkdir(exist_ok=True)
 
@@ -163,7 +166,8 @@ def _finalize_draft(draft_path: Path) -> None:
             dst = resources_dir / src.name
             if not dst.exists():
                 shutil.copy2(src, dst)
-            mat["path"] = str(dst)
+            # 写相对路径（POSIX 斜杠跨平台兼容）
+            mat["path"] = dst.relative_to(draft_path).as_posix()
 
     # ── 2. 补全剪映要求的缺失字段 ──
     for key, default in _REQUIRED_EXTRA_FIELDS.items():
@@ -183,23 +187,45 @@ def _finalize_draft(draft_path: Path) -> None:
 def install_to_jianying(draft_path: str) -> str | None:
     """将已生成的草稿安装到剪映专业版草稿目录并注册。
 
-    自动找到 ~/Movies/JianyingPro 草稿目录，复制草稿文件夹，
-    更新媒体路径，在 root_meta_info.json 注册，剪映重启后即可看到。
+    自动定位平台对应的剪映草稿目录（macOS: ~/Movies/JianyingPro/...；
+    Windows: %LOCALAPPDATA%/JianyingPro/User Data/Projects/com.lveditor.draft），
+    复制草稿文件夹并在 root_meta_info.json 注册，剪映重启后即可看到。
+
+    草稿内媒体使用相对路径（Resources/xxx），无需路径重映射，跨平台直接生效。
 
     Returns:
         安装后的草稿目录路径，失败时返回 None。
     """
-    import json, shutil, time, uuid
+    import json, os, shutil, sys, time, uuid
 
     src = Path(draft_path)
     if not src.exists():
         logger.error(f"草稿路径不存在: {draft_path}")
         return None
 
-    # 找 JianyingPro 草稿目录
-    jy_root = Path.home() / "Movies/JianyingPro/User Data/Projects/com.lveditor.draft"
-    if not jy_root.exists():
-        logger.error(f"找不到剪映草稿目录: {jy_root}")
+    # 平台适配：找到对应剪映草稿目录
+    jy_root = None
+    if sys.platform == "darwin":
+        jy_root = Path.home() / "Movies/JianyingPro/User Data/Projects/com.lveditor.draft"
+    elif sys.platform == "win32":
+        # Windows 剪映专业版默认路径（中国版 = JianyingPro，国际版 CapCut 路径不同）
+        for env_var in ("LOCALAPPDATA", "APPDATA"):
+            base = os.environ.get(env_var, "")
+            if not base:
+                continue
+            for app in ("JianyingPro", "CapCut"):
+                candidate = Path(base) / app / "User Data/Projects/com.lveditor.draft"
+                if candidate.exists():
+                    jy_root = candidate
+                    break
+            if jy_root:
+                break
+    else:
+        logger.error(f"暂不支持的平台: {sys.platform}")
+        return None
+
+    if not jy_root or not jy_root.exists():
+        logger.error(f"找不到剪映草稿目录（请先安装并启动一次剪映专业版）")
         return None
 
     dst = jy_root / src.name
@@ -207,16 +233,10 @@ def install_to_jianying(draft_path: str) -> str | None:
         shutil.rmtree(dst)
     shutil.copytree(src, dst)
 
-    # 路径重映射：把 src 内的绝对路径前缀替换为 dst 内的路径
+    # 媒体已是相对路径（Resources/xxx），无需重映射
     info_file = dst / _DRAFT_INFO_FILENAME
     if info_file.exists():
         content = json.loads(info_file.read_text(encoding="utf-8"))
-        src_str, dst_str = str(src), str(dst)
-        for mat_type in ("videos", "audios"):
-            for mat in content.get("materials", {}).get(mat_type, []):
-                p = mat.get("path", "")
-                if p.startswith(src_str):
-                    mat["path"] = dst_str + p[len(src_str):]
         content["path"] = str(dst)
         serialized = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
         info_file.write_text(serialized, encoding="utf-8")

@@ -1145,12 +1145,7 @@ class RightPanel(QWidget):
         ctrl_lay.addWidget(self._dur_lbl)
 
         # 音量
-        self._vol_btn = QPushButton("🔊")
-        self._vol_btn.setFixedSize(28, 28)
-        self._vol_btn.setStyleSheet(f"""
-            QPushButton {{ background: transparent; border: none; font-size: 14px; }}
-            QPushButton:hover {{ background: {BORDER}; border-radius: 14px; }}
-        """)
+        self._vol_btn = _VolumeIconBtn()
         self._vol_btn.clicked.connect(self._toggle_mute)
         ctrl_lay.addWidget(self._vol_btn)
 
@@ -1361,10 +1356,10 @@ class RightPanel(QWidget):
         muted = self._audio_output.volume() == 0
         if muted:
             self._audio_output.setVolume(self._vol_slider.value() / 100.0 or 1.0)
-            self._vol_btn.setText("🔊")
+            self._vol_btn.set_muted(False)
         else:
             self._audio_output.setVolume(0)
-            self._vol_btn.setText("🔇")
+            self._vol_btn.set_muted(True)
 
     # ── Private ───────────────────────────────────────────────
 
@@ -1433,7 +1428,334 @@ class _PanelToggleBtn(QWidget):
             self.clicked.emit()
 
 
+class _VolumeIconBtn(QPushButton):
+    """简约音量按钮：自绘喇叭 + 静音斜线，跨平台一致。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._muted = False
+        self.setFixedSize(22, 22)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFlat(True)
+        self.setStyleSheet(
+            "QPushButton { background: transparent; border: none; }"
+            f"QPushButton:hover {{ background: {BORDER}; border-radius: 11px; }}"
+        )
+
+    def set_muted(self, muted: bool):
+        self._muted = muted
+        self.update()
+
+    def paintEvent(self, _):
+        from PySide6.QtGui import QPainter, QPen, QColor, QPainterPath
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        cx, cy = w / 2, h / 2
+
+        color = QColor(TEXT_MUTED if self._muted else TEXT_PRIMARY)
+        p.setPen(QPen(color, 1.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(color)
+
+        # 喇叭主体（左侧矩形 + 右侧三角，构成扬声器轮廓）
+        body = QPainterPath()
+        # 矩形音箱（小）
+        body.moveTo(cx - 5, cy - 2)
+        body.lineTo(cx - 2, cy - 2)
+        # 三角喇叭口
+        body.lineTo(cx + 4, cy - 6)
+        body.lineTo(cx + 4, cy + 6)
+        body.lineTo(cx - 2, cy + 2)
+        body.lineTo(cx - 5, cy + 2)
+        body.closeSubpath()
+        p.drawPath(body)
+
+        if self._muted:
+            # 红色禁用斜杠
+            p.setPen(QPen(QColor(ERROR_COLOR), 1.6, Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(int(cx - 6), int(cy - 6), int(cx + 6), int(cy + 6))
+        else:
+            # 两道音波弧
+            p.setPen(QPen(color, 1.2, Qt.SolidLine, Qt.RoundCap))
+            p.setBrush(Qt.NoBrush)
+            from PySide6.QtCore import QRectF
+            p.drawArc(QRectF(cx + 2, cy - 5, 6, 10), -60 * 16, 120 * 16)
+            p.drawArc(QRectF(cx + 4, cy - 7, 8, 14), -60 * 16, 120 * 16)
+
+        p.end()
+
+
 # ── Main Window ───────────────────────────────────────────────
+class HistoryItem(QFrame):
+    """历史抽屉中的单条 run：缩略图 + 名称 + 时间。"""
+    double_clicked = Signal(str)  # mp4_path
+
+    def __init__(self, task_id: str, name: str, mp4_path: str, mtime: float, parent=None):
+        super().__init__(parent)
+        self._mp4 = mp4_path
+        self.setFixedHeight(64)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet(
+            f"HistoryItem {{ background: white; border: 1px solid {BORDER};"
+            " border-radius: 8px; }}"
+            f"HistoryItem:hover {{ background: {CARD_BG}; }}"
+        )
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(6, 6, 10, 6)
+        lay.setSpacing(10)
+
+        thumb = QLabel()
+        thumb.setFixedSize(90, 52)
+        thumb.setStyleSheet("background: #000; border-radius: 4px;")
+        thumb.setAlignment(Qt.AlignCenter)
+        thumb_path = self._ensure_thumb(mp4_path)
+        if thumb_path and Path(thumb_path).exists():
+            pix = QPixmap(thumb_path).scaled(
+                90, 52, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            thumb.setPixmap(pix)
+        lay.addWidget(thumb)
+
+        info_col = QVBoxLayout()
+        info_col.setSpacing(2)
+        info_col.setContentsMargins(0, 0, 0, 0)
+        name_lbl = QLabel(name)
+        name_lbl.setStyleSheet(
+            f"color: {TEXT_PRIMARY}; font-size: 12px; font-weight: 600; background: transparent;")
+        name_lbl.setWordWrap(False)
+        from datetime import datetime as _dt
+        time_str = _dt.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+        time_lbl = QLabel(time_str)
+        time_lbl.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 10px; background: transparent;")
+        info_col.addWidget(name_lbl)
+        info_col.addWidget(time_lbl)
+        info_col.addStretch()
+        lay.addLayout(info_col, 1)
+
+    @staticmethod
+    def _ensure_thumb(mp4_path: str) -> str:
+        try:
+            mp4 = Path(mp4_path)
+            if not mp4.exists():
+                return ""
+            thumb = mp4.parent / "附件" / "thumb.jpg"
+            if thumb.exists():
+                return str(thumb)
+            thumb.parent.mkdir(parents=True, exist_ok=True)
+            import subprocess
+            subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error", "-ss", "0.3",
+                 "-i", str(mp4), "-frames:v", "1", "-vf", "scale=180:-1", str(thumb)],
+                check=False, timeout=10,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            return str(thumb) if thumb.exists() else ""
+        except Exception:
+            return ""
+
+    def mouseDoubleClickEvent(self, e):
+        if e.button() == Qt.LeftButton and self._mp4:
+            self.double_clicked.emit(self._mp4)
+
+
+class HistoryDrawer(QFrame):
+    """右侧历史抽屉，主窗口内嵌覆盖层，沿用主窗体配色。"""
+    item_chosen = Signal(str)  # mp4_path
+
+    WIDTH = 340
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("historyDrawer")
+        self.setStyleSheet(
+            f"#historyDrawer {{ background: {BG}; border-left: 1px solid {BORDER}; }}"
+        )
+        self._open = False
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setSpacing(10)
+
+        # Header: title + close
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        title = QLabel("历史纪录")
+        title.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {TEXT_PRIMARY};")
+        head.addWidget(title)
+        head.addStretch()
+        close_btn = QPushButton("×")
+        close_btn.setFixedSize(22, 22)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {TEXT_MUTED};"
+            " border: none; font-size: 18px; font-weight: 500; }}"
+            f"QPushButton:hover {{ color: {TEXT_PRIMARY}; }}"
+        )
+        close_btn.clicked.connect(self.close_drawer)
+        head.addWidget(close_btn)
+        outer.addLayout(head)
+
+        # Empty hint
+        self._empty_lbl = QLabel("暂无历史纪录")
+        self._empty_lbl.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 12px; padding: 24px 0;")
+        self._empty_lbl.setAlignment(Qt.AlignCenter)
+        outer.addWidget(self._empty_lbl)
+        self._empty_lbl.hide()
+
+        # Scrollable list
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self._list_holder = QWidget()
+        self._list_holder.setStyleSheet("background: transparent;")
+        self._list_lay = QVBoxLayout(self._list_holder)
+        self._list_lay.setContentsMargins(0, 0, 0, 0)
+        self._list_lay.setSpacing(6)
+        self._list_lay.setAlignment(Qt.AlignTop)
+        scroll.setWidget(self._list_holder)
+        outer.addWidget(scroll, 1)
+
+        # Footer: open output dir
+        from config.settings import OUTPUT_DIR
+        self._output_dir = str(OUTPUT_DIR)
+        foot = QHBoxLayout()
+        foot.setSpacing(6)
+        path_lbl = QLabel(f"输出目录：{Path(self._output_dir).name}/")
+        path_lbl.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 10px;")
+        path_lbl.setToolTip(self._output_dir)
+        foot.addWidget(path_lbl, 1)
+        open_btn = QPushButton("打开")
+        open_btn.setObjectName("secondary")
+        open_btn.setFixedHeight(24)
+        open_btn.setStyleSheet(
+            f"QPushButton {{ background: {CARD_BG}; color: {TEXT_PRIMARY};"
+            f" border: 1px solid {BORDER}; border-radius: 6px;"
+            " padding: 0 10px; font-size: 11px; }}"
+            f"QPushButton:hover {{ background: #E8E8ED; }}"
+        )
+        open_btn.clicked.connect(self._open_output_dir)
+        foot.addWidget(open_btn)
+        outer.addLayout(foot)
+
+    # ── Public ─────────────────────────────────────────────────
+
+    def is_open(self) -> bool:
+        return self._open
+
+    def open_drawer(self):
+        self.refresh()
+        self._open = True
+        self._animate(open=True)
+
+    def close_drawer(self):
+        self._open = False
+        self._animate(open=False)
+
+    def toggle(self):
+        if self._open:
+            self.close_drawer()
+        else:
+            self.open_drawer()
+
+    def refresh(self):
+        # Clear list
+        while self._list_lay.count():
+            it = self._list_lay.takeAt(0)
+            w = it.widget()
+            if w:
+                w.deleteLater()
+
+        from config.settings import OUTPUT_DIR
+        out = Path(OUTPUT_DIR)
+        items = []
+        if out.exists():
+            for d in out.iterdir():
+                if not d.is_dir() or d.name.startswith(".") or d.name in ("storyboards","frames","videos","final","logs"):
+                    continue
+                mp4 = d / f"{d.name}.mp4"
+                if not mp4.exists():
+                    # fallback：取目录里最大的 mp4
+                    cands = sorted(d.glob("*.mp4"), key=lambda p: p.stat().st_size, reverse=True)
+                    if not cands:
+                        continue
+                    mp4 = cands[0]
+                name_file = d / "附件" / "name.txt"
+                display = d.name
+                if name_file.exists():
+                    try:
+                        display = name_file.read_text(encoding="utf-8").strip() or d.name
+                    except Exception:
+                        pass
+                items.append((d.name, display, str(mp4), mp4.stat().st_mtime))
+
+        items.sort(key=lambda t: t[3], reverse=True)
+
+        if not items:
+            self._empty_lbl.show()
+        else:
+            self._empty_lbl.hide()
+            for task_id, name, mp4, mtime in items:
+                item = HistoryItem(task_id, name, mp4, mtime)
+                item.double_clicked.connect(self.item_chosen)
+                self._list_lay.addWidget(item)
+
+    # ── Animation: slide in from the right ────────────────────
+
+    def _animate(self, open: bool):
+        parent = self.parentWidget()
+        if not parent:
+            return
+        full_w = self.WIDTH
+        h = parent.height()
+        x_open = parent.width() - full_w
+        x_closed = parent.width()
+        self.setFixedHeight(h)
+        self.setFixedWidth(full_w)
+        self.raise_()
+        self.show()
+        anim = QPropertyAnimation(self, b"pos", self)
+        anim.setDuration(220)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        from PySide6.QtCore import QPoint
+        if open:
+            self.move(x_closed, 0)
+            anim.setStartValue(QPoint(x_closed, 0))
+            anim.setEndValue(QPoint(x_open, 0))
+        else:
+            anim.setStartValue(self.pos())
+            anim.setEndValue(QPoint(x_closed, 0))
+            anim.finished.connect(self.hide)
+        anim.start()
+        self._anim = anim
+
+    def reposition(self):
+        """Parent 尺寸变化时调用：保持靠右贴边、占满高。"""
+        parent = self.parentWidget()
+        if not parent:
+            return
+        self.setFixedHeight(parent.height())
+        self.setFixedWidth(self.WIDTH)
+        if self._open:
+            self.move(parent.width() - self.WIDTH, 0)
+        else:
+            self.move(parent.width(), 0)
+
+    def _open_output_dir(self):
+        import subprocess, platform
+        target = self._output_dir
+        Path(target).mkdir(parents=True, exist_ok=True)
+        if platform.system() == "Darwin":
+            subprocess.Popen(["open", target])
+        elif platform.system() == "Windows":
+            subprocess.Popen(["explorer", target])
+        else:
+            subprocess.Popen(["xdg-open", target])
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1460,6 +1782,11 @@ class MainWindow(QMainWindow):
         self._copyright.setAttribute(Qt.WA_TransparentForMouseEvents)
         self._copyright.adjustSize()
         self._copyright.raise_()
+
+        # ── 历史抽屉（覆盖在主窗右侧，初始隐藏）──
+        self._history_drawer = HistoryDrawer(self.centralWidget())
+        self._history_drawer.item_chosen.connect(self._on_history_chosen)
+        self._history_drawer.hide()
 
     # ── Task management ──────────────────────────────────────
 
@@ -1697,6 +2024,8 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._reposition_copyright()
+        if hasattr(self, "_history_drawer"):
+            self._history_drawer.reposition()
 
     def _reposition_copyright(self):
         lbl = self._copyright
@@ -1754,6 +2083,24 @@ class MainWindow(QMainWindow):
 
         header.addLayout(title_col)
         header.addStretch()
+
+        # ── 历史纪录按钮（沿用主窗体 chip 风格）──
+        self._history_btn = QPushButton("🕘")
+        self._history_btn.setCursor(Qt.PointingHandCursor)
+        self._history_btn.setToolTip("历史纪录")
+        self._history_btn.setStyleSheet(f"""
+            QPushButton {{
+                font-size: 10px; color: {TEXT_PRIMARY};
+                background: {CARD_BG}; border: 1px solid {BORDER};
+                border-radius: 6px; padding: 0;
+            }}
+            QPushButton:hover {{ background: #E8E8ED; border-color: {FOCUS_BORDER}; }}
+        """)
+        self._history_btn.setFixedSize(20, 18)
+        self._history_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self._history_btn.clicked.connect(self._on_toggle_history)
+        header.addWidget(self._history_btn)
+
         main.addLayout(header)
 
         content = QHBoxLayout()
@@ -1923,9 +2270,18 @@ class MainWindow(QMainWindow):
             self.start_btn.setText("开始")
 
     def _on_task_renamed(self, task_idx: int, new_name: str):
-        """任务卡重命名 → 同步更新 task.name，确保 worker 用正确名字建输出目录。"""
+        """任务卡重命名 → 同步更新 task.name；若已建输出目录，同步写入 name.txt 持久化。"""
         if 0 <= task_idx < len(self._tasks):
-            self._tasks[task_idx].name = new_name
+            task = self._tasks[task_idx]
+            task.name = new_name
+            # 已建目录 → 把展示名写入 name.txt（目录名 task_id 不变，仅改展示名）
+            if task.output_dir:
+                try:
+                    other = Path(task.output_dir) / "附件"
+                    if other.exists():
+                        (other / "name.txt").write_text(new_name, encoding="utf-8")
+                except Exception:
+                    pass
 
     def _on_stop(self):
         task = self._tasks[self._current_idx]
@@ -1948,6 +2304,18 @@ class MainWindow(QMainWindow):
             subprocess.Popen(["explorer", target])
         else:
             subprocess.Popen(["xdg-open", target])
+
+    def _on_toggle_history(self):
+        self._history_drawer.reposition()
+        self._history_drawer.toggle()
+
+    def _on_history_chosen(self, mp4_path: str):
+        """双击历史项：把 mp4 加载到主面板（只读预览）。不开新任务、不占 TaskState。"""
+        if not mp4_path or not Path(mp4_path).exists():
+            return
+        self.right_panel.show_done(mp4_path)
+        # 关闭抽屉以让用户看见播放器
+        self._history_drawer.close_drawer()
 
     def _on_model_select(self):
         """视频模型切换 — 毛玻璃卡片弹窗。"""

@@ -73,8 +73,8 @@ if [[ ! -d "$VENV" ]]; then
 fi
 
 log "安装 Python 依赖（首次约 2-3 分钟，请耐心）"
-"$VENV/bin/pip" install --upgrade pip --quiet || warn "pip 升级失败，继续使用旧版"
-"$VENV/bin/pip" install -r "$ROOT/requirements.txt" --quiet || die "依赖安装失败，请检查网络"
+"$VENV/bin/pip" install --upgrade pip || warn "pip 升级失败，继续使用旧版"
+"$VENV/bin/pip" install -r "$ROOT/requirements.txt" || die "依赖安装失败，上方 pip 输出有详细原因（常见：网络 / 代理 / 镜像源）"
 ok "依赖安装完成"
 
 # ── 4. API Key 填写向导（图形界面）─────────────────────────────
